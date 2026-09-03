@@ -28,15 +28,16 @@ import app.slimboard.emoji.EmojiPanelView
 import app.slimboard.layout.LayoutRepository
 import app.slimboard.settings.Prefs
 import app.slimboard.settings.SettingsActivity
+import app.slimboard.text.SuggestionEngine
 import app.slimboard.theme.KeyboardTheme
 import app.slimboard.ui.InputViewContainer
 import app.slimboard.ui.ToolbarView
 import app.slimboard.ui.keyboard.KeyboardView
 
 /**
- * The input method. Owns the InputConnection side of typing (commit, auto-cap, double-space period,
- * layer per field type, enter action, insets), the toolbar and its panels, clipboard capture and
- * paste (text and images), and emoji search routing.
+ * The input method. Owns the InputConnection side of typing (composing word, suggestions,
+ * autocorrect with one-tap revert, auto-cap, double-space period, layer per field type, enter
+ * action, insets), the toolbar and its panels, clipboard capture and paste, and emoji search.
  */
 class SlimBoardService :
     InputMethodService(),
@@ -50,6 +51,7 @@ class SlimBoardService :
     private lateinit var layouts: LayoutRepository
     private lateinit var store: ClipboardStore
     private lateinit var clipboard: ClipboardManager
+    private lateinit var engine: SuggestionEngine
     private val handler = Handler(Looper.getMainLooper())
 
     private var container: InputViewContainer? = null
@@ -63,14 +65,22 @@ class SlimBoardService :
     private var currentLayer = LayoutRepository.QWERTY
     private var variant = LayoutRepository.Variant.NONE
     private var isPassword = false
+    private var suggestionsForField = false
 
-    /** Field asked for no personalised learning (incognito) or user forced it. Used from Phase 3. */
+    /** Field asked for no personalised learning (incognito) or user forced it. */
     var noLearning = false
         private set
 
     private var lastSpaceAt = 0L
     private var showRequestedAt = 0L
     private val windowLocation = IntArray(2)
+
+    // Word being composed (underlined in the app) and its suggestions.
+    private val composing = StringBuilder()
+    private var suggestionGeneration = 0
+    private var latestResult: SuggestionEngine.Result? = null
+    private class AutoCorrection(val typed: String, val applied: String, val separator: String)
+    private var lastAutoCorrection: AutoCorrection? = null
 
     // Emoji search: non-null while the keyboard is typing into the search strip instead of the app.
     private var emojiQuery: StringBuilder? = null
@@ -93,6 +103,7 @@ class SlimBoardService :
         store = ClipboardStore.get(this)
         clipboard = getSystemService(ClipboardManager::class.java)
         clipboard.addPrimaryClipChangedListener(clipListener)
+        engine = SuggestionEngine(this)
         Log.d(TAG, "onCreate took ${SystemClock.uptimeMillis() - start} ms")
     }
 
@@ -128,7 +139,8 @@ class SlimBoardService :
         clipboardPanel?.theme = theme
         clipboardPanel?.expiryHours = prefs.clipboardExpiryHours
         emojiPanel?.theme = theme
-        container?.toolbarVisible = prefs.toolbar
+        // The strip is needed for suggestions even when the user hides the toolbar buttons.
+        container?.toolbarVisible = prefs.toolbar || prefs.suggestions
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -149,6 +161,7 @@ class SlimBoardService :
         editor = info
         analyze(info)
         lastSpaceAt = 0
+        resetComposing()
 
         val view = keyboardView ?: return
         exitEmojiSearch()
@@ -163,6 +176,12 @@ class SlimBoardService :
             Log.d(TAG, "show -> first draw: ${SystemClock.uptimeMillis() - showRequestedAt} ms (restarting=$restarting)")
         }
 
+        if (suggestionsForField) {
+            engine.ensureLoaded()
+            // Emoji names double as suggestions ("fire" → 🔥), so the list is needed here too.
+            EmojiData.ensureLoaded(this) { }
+        }
+
         if (prefs.clipboardEnabled) {
             store.expire(prefs.clipboardExpiryHours * 3_600_000L)
             ingestPrimaryClip()
@@ -175,6 +194,8 @@ class SlimBoardService :
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
         keyboardView?.cancelTouches()
+        finishComposingInApp()
+        resetComposing()
         lastSpaceAt = 0
     }
 
@@ -183,6 +204,10 @@ class SlimBoardService :
         candidatesStart: Int, candidatesEnd: Int,
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        // The user moved the cursor away from the word we are composing: stop composing it.
+        if (composing.isNotEmpty() && (candidatesEnd < 0 || newSelEnd != candidatesEnd || newSelStart != newSelEnd)) {
+            resetComposing()
+        }
         updateAutoShift()
     }
 
@@ -237,6 +262,11 @@ class SlimBoardService :
             variation == InputType.TYPE_TEXT_VARIATION_URI -> LayoutRepository.Variant.URL
             else -> LayoutRepository.Variant.NONE
         }
+
+        val noSuggestionsFlag = info.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS != 0
+        val plainText = cls == InputType.TYPE_CLASS_TEXT && variant == LayoutRepository.Variant.NONE &&
+            variation != InputType.TYPE_TEXT_VARIATION_FILTER
+        suggestionsForField = prefs.suggestions && plainText && !isPassword && !noSuggestionsFlag
     }
 
     private fun enterLabelFor(info: EditorInfo): String {
@@ -260,11 +290,109 @@ class SlimBoardService :
             view.setAutoShift(false)
             return
         }
+        // While composing, the field's caps mode is stale (it describes the position before the word).
+        if (composing.isNotEmpty()) {
+            view.setAutoShift(false)
+            return
+        }
         val ic = currentInputConnection ?: return
         val info = editor ?: return
         // Honours the field's TYPE_TEXT_FLAG_CAP_* flags; fields without them never auto-capitalise.
         val mode = ic.getCursorCapsMode(info.inputType)
         view.setAutoShift(mode != 0)
+    }
+
+    // ---- Composing, suggestions, autocorrect ----
+
+    private fun isWordChar(text: String): Boolean {
+        if (text.length != 1) return false
+        val c = text[0]
+        return c.isLetter() || (c == '\'' && composing.isNotEmpty())
+    }
+
+    private fun resetComposing() {
+        composing.setLength(0)
+        latestResult = null
+        toolbar?.setSuggestions("", emptyList(), -1)
+    }
+
+    /** Ends the composing region in the app without changing its text. */
+    private fun finishComposingInApp() {
+        if (composing.isNotEmpty()) currentInputConnection?.finishComposingText()
+    }
+
+    private fun appendToComposing(text: String) {
+        val ic = currentInputConnection ?: return
+        composing.append(text)
+        ic.setComposingText(composing, 1)
+        requestSuggestions()
+    }
+
+    private fun requestSuggestions() {
+        val typed = composing.toString()
+        val gen = ++suggestionGeneration
+        engine.suggestAsync(typed, gen) { g, result ->
+            if (g != suggestionGeneration || composing.toString() != result.typed) return@suggestAsync
+            latestResult = result
+            showSuggestions(result)
+        }
+    }
+
+    private fun showSuggestions(result: SuggestionEngine.Result) {
+        val items = ArrayList(result.suggestions)
+        var highlight = when {
+            items.isEmpty() -> -1
+            result.autoCorrect != null && prefs.autocorrect -> items.indexOf(result.autoCorrect).takeIf { it >= 0 } ?: 1
+            items.size >= 2 -> 1
+            else -> 0
+        }
+        if (highlight >= items.size) highlight = items.size - 1
+        EmojiData.exact(result.typed)?.let { if (items.size < 4) items.add(it) }
+        toolbar?.setSuggestions(result.typed, items, highlight)
+    }
+
+    /**
+     * Commits the composed word followed by [separator], applying autocorrect when enabled and the
+     * engine has a confident candidate. Remembers the correction so one backspace can undo it.
+     */
+    private fun commitComposing(separator: String) {
+        val ic = currentInputConnection ?: return
+        val typed = composing.toString()
+        if (typed.isEmpty()) return
+        val result = latestResult?.takeIf { it.typed == typed } ?: engine.suggestSync(typed)
+        val auto = if (prefs.autocorrect) result.autoCorrect else null
+        ic.beginBatchEdit()
+        if (auto != null && auto != typed) {
+            ic.commitText(auto + separator, 1)
+            lastAutoCorrection = AutoCorrection(typed, auto, separator)
+        } else {
+            ic.commitText(typed + separator, 1)
+            lastAutoCorrection = null
+            learn(typed)
+        }
+        ic.endBatchEdit()
+        resetComposing()
+    }
+
+    private fun learn(word: String) {
+        if (!prefs.learnWords || noLearning) return
+        if (word.length < 2 || !word.all { it.isLetter() || it == '\'' }) return
+        if (engine.isWord(word)) return
+        engine.learn(word)
+    }
+
+    /** Backspace right after an autocorrect restores what was typed and remembers the word. */
+    private fun revertAutoCorrection(ac: AutoCorrection) {
+        val ic = currentInputConnection ?: return
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(ac.applied.length + ac.separator.length, 0)
+        composing.setLength(0)
+        composing.append(ac.typed)
+        ic.setComposingText(composing, 1)
+        ic.endBatchEdit()
+        lastAutoCorrection = null
+        if (prefs.learnWords && !noLearning) engine.learn(ac.typed, force = true)
+        requestSuggestions()
     }
 
     // ---- Panels ----
@@ -294,6 +422,8 @@ class SlimBoardService :
     // ---- Emoji search (typing goes to the toolbar strip) ----
 
     private fun enterEmojiSearch() {
+        finishComposingInApp()
+        resetComposing()
         showPanel(ToolbarView.Panel.NONE)
         emojiQuery = StringBuilder()
         toolbar?.setSearch(true)
@@ -314,8 +444,11 @@ class SlimBoardService :
     }
 
     private fun commitEmoji(emoji: String) {
+        finishComposingInApp()
+        resetComposing()
         currentInputConnection?.commitText(emoji, 1)
         lastSpaceAt = 0
+        lastAutoCorrection = null
     }
 
     // ---- Clipboard capture ----
@@ -374,6 +507,8 @@ class SlimBoardService :
         val ic = currentInputConnection ?: return
         val info = editor ?: return
         val file = item.imageFile ?: return
+        finishComposingInApp()
+        resetComposing()
         val uri = FileProvider.getUriForFile(this, "$packageName.clips", file)
         val description = ClipDescription("SlimBoard image", arrayOf(item.mime))
 
@@ -396,8 +531,18 @@ class SlimBoardService :
 
     override fun onText(text: String) {
         emojiQuery?.let { it.append(text); updateEmojiSearch(); return }
-        currentInputConnection?.commitText(text, 1)
+        lastAutoCorrection = null
         lastSpaceAt = 0
+        if (suggestionsForField && isWordChar(text)) {
+            appendToComposing(text)
+            keyboardView?.setAutoShift(false)
+            return
+        }
+        if (composing.isNotEmpty()) {
+            commitComposing(text)
+        } else {
+            currentInputConnection?.commitText(text, 1)
+        }
         updateAutoShift()
     }
 
@@ -405,6 +550,13 @@ class SlimBoardService :
         emojiQuery?.let { if (it.isNotEmpty() && it.last() != ' ') it.append(' '); updateEmojiSearch(); return }
         val ic = currentInputConnection ?: return
         val now = SystemClock.uptimeMillis()
+        if (composing.isNotEmpty()) {
+            commitComposing(" ")
+            lastSpaceAt = now
+            updateAutoShift()
+            return
+        }
+        lastAutoCorrection = null
         if (prefs.doubleSpacePeriod && now - lastSpaceAt < DOUBLE_SPACE_MS && canInsertPeriod(ic)) {
             ic.beginBatchEdit()
             ic.deleteSurroundingText(1, 0)
@@ -431,15 +583,36 @@ class SlimBoardService :
             if (q.isEmpty()) exitEmojiSearch() else { q.setLength(q.offsetByCodePoints(q.length, -1)); updateEmojiSearch() }
             return
         }
+        lastSpaceAt = 0
+        lastAutoCorrection?.let { revertAutoCorrection(it); return }
+        if (composing.isNotEmpty()) {
+            val ic = currentInputConnection ?: return
+            composing.setLength(composing.length - 1)
+            if (composing.isEmpty()) {
+                ic.commitText("", 1)
+                resetComposing()
+                updateAutoShift()
+            } else {
+                ic.setComposingText(composing, 1)
+                requestSuggestions()
+            }
+            return
+        }
         // A DEL key event respects selections and works in apps whose InputConnection mishandles
         // deleteSurroundingText. onUpdateSelection refreshes auto-shift afterwards.
         sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
-        lastSpaceAt = 0
     }
 
     override fun onDeleteWord() {
         emojiQuery?.let { it.setLength(0); updateEmojiSearch(); return }
         val ic = currentInputConnection ?: return
+        lastAutoCorrection = null
+        if (composing.isNotEmpty()) {
+            ic.commitText("", 1)
+            resetComposing()
+            updateAutoShift()
+            return
+        }
         val before = ic.getTextBeforeCursor(64, 0)
         if (before.isNullOrEmpty()) return
         var end = before.length
@@ -462,6 +635,8 @@ class SlimBoardService :
             exitEmojiSearch()
             return
         }
+        if (composing.isNotEmpty()) commitComposing("")
+        lastAutoCorrection = null
         val ic = currentInputConnection ?: return
         val options = editor?.imeOptions ?: 0
         val action = options and EditorInfo.IME_MASK_ACTION
@@ -484,6 +659,9 @@ class SlimBoardService :
 
     override fun onCursorMove(steps: Int) {
         if (emojiQuery != null) return
+        finishComposingInApp()
+        resetComposing()
+        lastAutoCorrection = null
         val keyCode = if (steps < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
         repeat(kotlin.math.abs(steps)) { sendDownUpKeyEvents(keyCode) }
     }
@@ -519,6 +697,21 @@ class SlimBoardService :
         exitEmojiSearch()
     }
 
+    override fun onSuggestion(index: Int) {
+        val ic = currentInputConnection ?: return
+        val result = latestResult ?: return
+        val items = ArrayList(result.suggestions)
+        EmojiData.exact(result.typed)?.let { if (items.size < 4) items.add(it) }
+        val chosen = items.getOrNull(index) ?: return
+        val isEmoji = index >= result.suggestions.size
+        ic.commitText(if (isEmoji) chosen else "$chosen ", 1)
+        if (!isEmoji) learn(chosen)
+        lastAutoCorrection = null
+        lastSpaceAt = if (isEmoji) 0 else SystemClock.uptimeMillis()
+        resetComposing()
+        updateAutoShift()
+    }
+
     // ---- EmojiPanelView.Listener ----
 
     override fun onEmoji(emoji: String) = commitEmoji(emoji)
@@ -530,8 +723,11 @@ class SlimBoardService :
     // ---- ClipboardPanel.Listener ----
 
     override fun onPasteText(text: String) {
+        finishComposingInApp()
+        resetComposing()
         currentInputConnection?.commitText(text, 1)
         lastSpaceAt = 0
+        lastAutoCorrection = null
         updateAutoShift()
     }
 

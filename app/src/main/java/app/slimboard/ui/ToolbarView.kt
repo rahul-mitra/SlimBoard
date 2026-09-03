@@ -29,6 +29,7 @@ class ToolbarView(context: Context, private val listener: Listener) : View(conte
         fun onSettings()
         fun onChip()
         fun onSearchResult(emoji: String)
+        fun onSuggestion(index: Int)
     }
 
     enum class Panel { NONE, CLIPBOARD, EMOJI }
@@ -49,6 +50,35 @@ class ToolbarView(context: Context, private val listener: Listener) : View(conte
     private var searchQuery = ""
     private var searchResults: List<String> = emptyList()
     private var resultsScroll = 0f
+
+    // Suggestion strip: shown while a word is being composed. A small chevron lets the user
+    // swap it for the icons until the next word.
+    private var suggestions: List<String> = emptyList()
+    private var suggestionHighlight = -1
+    private var suggestionsFor = ""
+    private var iconsOverSuggestions = false
+    private val suggestionRects = Array(4) { RectF() }
+    private val toggleRect = RectF()
+    private val boldText = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = sp(16f)
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+        textAlign = Paint.Align.CENTER
+    }
+    private val normalText = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = sp(16f)
+        textAlign = Paint.Align.CENTER
+    }
+
+    fun setSuggestions(typed: String, items: List<String>, highlight: Int) {
+        if (typed != suggestionsFor) iconsOverSuggestions = false
+        suggestionsFor = typed
+        suggestions = items.take(4)
+        suggestionHighlight = highlight
+        invalidate()
+    }
+
+    private val showingSuggestions: Boolean
+        get() = !searchMode && suggestions.isNotEmpty() && !iconsOverSuggestions && activePanel == Panel.NONE
 
     val heightPx = dp(40f)
     private val slot = dp(48f)
@@ -92,7 +122,41 @@ class ToolbarView(context: Context, private val listener: Listener) : View(conte
     override fun onDraw(canvas: Canvas) {
         fill.color = theme.background
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
-        if (searchMode) drawSearch(canvas) else drawNormal(canvas)
+        when {
+            searchMode -> drawSearch(canvas)
+            showingSuggestions -> drawSuggestions(canvas)
+            else -> drawNormal(canvas)
+        }
+    }
+
+    private fun drawSuggestions(canvas: Canvas) {
+        visibleItems.clear()
+        chipRect.setEmpty()
+        // Toggle chevron on the left: "›" = show the toolbar instead.
+        val toggleW = dp(36f)
+        toggleRect.set(0f, 0f, toggleW, height.toFloat())
+        stroke.color = theme.hint
+        val cx = toggleW / 2
+        val cy = height / 2f
+        canvas.drawLine(cx - 3 * u, cy - 6 * u, cx + 3 * u, cy, stroke)
+        canvas.drawLine(cx + 3 * u, cy, cx - 3 * u, cy + 6 * u, stroke)
+
+        val n = suggestions.size
+        val cellW = (width - toggleW) / n
+        for (i in 0 until n) {
+            val r = suggestionRects[i]
+            r.set(toggleW + i * cellW, 0f, toggleW + (i + 1) * cellW, height.toFloat())
+            if (i > 0) {
+                fill.color = theme.border
+                canvas.drawRect(r.left, height * 0.25f, r.left + u, height * 0.75f, fill)
+            }
+            val p = if (i == suggestionHighlight) boldText else normalText
+            p.color = theme.label
+            val shown = TextUtils.ellipsize(suggestions[i], p, cellW - dp(12f), TextUtils.TruncateAt.END)
+            val baseline = cy - (p.descent() + p.ascent()) / 2
+            canvas.drawText(shown, 0, shown.length, r.centerX(), baseline, p)
+        }
+        for (i in n until suggestionRects.size) suggestionRects[i].setEmpty()
     }
 
     private fun drawNormal(canvas: Canvas) {
@@ -244,6 +308,22 @@ class ToolbarView(context: Context, private val listener: Listener) : View(conte
     }
 
     private fun tap(x: Float, y: Float) {
+        if (showingSuggestions) {
+            if (toggleRect.contains(x, y)) {
+                iconsOverSuggestions = true
+                haptic()
+                invalidate()
+                return
+            }
+            for (i in suggestions.indices) {
+                if (suggestionRects[i].contains(x, y)) {
+                    haptic()
+                    listener.onSuggestion(i)
+                    return
+                }
+            }
+            return
+        }
         for (item in visibleItems) {
             if (itemRects[item.ordinal].contains(x, y)) {
                 haptic()

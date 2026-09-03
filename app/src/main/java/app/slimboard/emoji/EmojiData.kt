@@ -31,7 +31,14 @@ object EmojiData {
     )
 
     @Volatile var groups: List<EmojiGroup>? = null
-        private set
+        private set(v) {
+            field = v
+            byName = v?.let { gs -> HashMap<String, String>().also { m -> for (g in gs) for (e in g.emojis) m.putIfAbsent(e.searchName, e.chars) } }
+        }
+    @Volatile private var byName: Map<String, String>? = null
+
+    /** Emoji whose name is exactly [word] (case-insensitive), e.g. "fire" → 🔥. Null if not loaded. */
+    fun exact(word: String): String? = byName?.get(word.lowercase())
     @Volatile var available = true
         private set
 

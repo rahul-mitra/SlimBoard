@@ -40,6 +40,12 @@ class Prefs(context: Context) {
     var haptics: Boolean by bool(HAPTICS, true)
     var sound: Boolean by bool(SOUND, false)
 
+    // Suggestions
+    var suggestions: Boolean by bool(SUGGESTIONS, true)
+    /** Off until the dictionary quality is proven; see PLAN.md risks. */
+    var autocorrect: Boolean by bool(AUTOCORRECT, false)
+    var learnWords: Boolean by bool(LEARN_WORDS, true)
+
     // Clipboard
     var clipboardEnabled: Boolean by bool(CLIPBOARD_ENABLED, true)
     var clipboardImages: Boolean by bool(CLIPBOARD_IMAGES, true)
@@ -104,6 +110,9 @@ class Prefs(context: Context) {
         const val KEY_PREVIEW = "key_preview"
         const val HAPTICS = "haptics"
         const val SOUND = "sound"
+        const val SUGGESTIONS = "suggestions"
+        const val AUTOCORRECT = "autocorrect"
+        const val LEARN_WORDS = "learn_words"
         const val CLIPBOARD_ENABLED = "clipboard_enabled"
         const val CLIPBOARD_IMAGES = "clipboard_images"
         const val CLIPBOARD_EXPIRY_HOURS = "clipboard_expiry_hours"

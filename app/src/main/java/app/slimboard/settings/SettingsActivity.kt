@@ -10,6 +10,7 @@ import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -170,6 +171,12 @@ private fun SettingsScreen(
             PrefSlider("Long-press delay", prefs.longPressMs, 200f..500f, 5, { "$it ms" }) { prefs.longPressMs = it }
             PrefSwitch("Incognito", "Never learn from typing (has effect once suggestions exist)", prefs.incognito) { prefs.incognito = it }
 
+            SectionHeader("Suggestions")
+            PrefSwitch("Show suggestions", "Word completions and corrections above the keys", prefs.suggestions) { prefs.suggestions = it }
+            PrefSwitch("Auto-correct", "Fix the word when you press space. Backspace once to undo.", prefs.autocorrect) { prefs.autocorrect = it }
+            PrefSwitch("Learn new words", "Words you type twice are remembered on this device only", prefs.learnWords) { prefs.learnWords = it }
+            LearnedWords()
+
             SectionHeader("Clipboard")
             var clipboardEnabled by remember { mutableStateOf(prefs.clipboardEnabled) }
             SwitchRow("Clipboard history", "Keep what you copy, in the keyboard", clipboardEnabled) {
@@ -265,6 +272,44 @@ private fun SetupCard(imeEnabled: Boolean, imeActive: Boolean, onOpenImeSettings
             if (!imeActive) Button(onClick = onPickIme, modifier = Modifier.padding(top = 4.dp)) {
                 Text(androidx.compose.ui.res.stringResource(R.string.setup_select_button))
             }
+        }
+    }
+}
+
+/** Expandable list of words the keyboard has learned, each removable. */
+@Composable
+private fun LearnedWords() {
+    val context = LocalContext.current
+    val dictionary = remember { app.slimboard.text.PersonalDictionary.get(context) }
+    val words = remember { androidx.compose.runtime.mutableStateListOf<String>().also { l -> l.addAll(dictionary.all().map { it.first }) } }
+    var expanded by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Learned words", style = MaterialTheme.typography.bodyLarge)
+            Text("${words.size} words", style = MaterialTheme.typography.bodySmall)
+        }
+        Button(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide" else "Show") }
+    }
+    if (expanded) {
+        if (words.isEmpty()) Text("Nothing learned yet.", style = MaterialTheme.typography.bodySmall)
+        for (w in words.toList()) {
+            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(w, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                Text(
+                    "Remove",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .padding(start = 12.dp)
+                        .clickable { dictionary.forget(w); words.remove(w) },
+                )
+            }
+        }
+        if (words.isNotEmpty()) {
+            Button(onClick = { dictionary.clear(); words.clear() }, modifier = Modifier.padding(top = 8.dp)) { Text("Forget all") }
         }
     }
 }

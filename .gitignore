@@ -22,3 +22,6 @@ Thumbs.db
 
 # Private planning notes (kept local)
 plans/
+
+# Release artifacts (uploaded to GitHub Releases, not committed)
+dist/

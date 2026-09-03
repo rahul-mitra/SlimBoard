@@ -78,6 +78,18 @@ license). To update for a new Unicode version:
 powershell -File tools/gen-emoji.ps1 -Version 17.0
 ```
 
+## Regenerating the dictionary
+
+`app/src/main/assets/dict/en.txt` ("word count" per line) is generated from Peter Norvig's unigram counts
+filtered by the dwyl english-words list, plus a tiered list of contractions. Both sources are downloaded
+into `%TEMP%` on first run:
+
+```bash
+powershell -File tools/gen-dict.ps1 -Max 70000
+```
+
+The phone builds a byte trie from it on first use (~400 ms on the S24) and caches it under `files/dict/`.
+
 ## Baseline measurements
 
 After the keyboard is showing on a connected phone:

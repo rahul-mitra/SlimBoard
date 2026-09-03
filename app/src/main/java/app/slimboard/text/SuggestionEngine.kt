@@ -77,9 +77,13 @@ class SuggestionEngine(context: Context) {
         val scored = ArrayList<Pair<Int, Candidate>>()
         for (c in cands) {
             if (!seen.add(c.word)) continue
+            // Distance dominates frequency: one extra edit costs more than the whole rank range,
+            // so "their" (1 edit) beats "the" (2 edits) despite "the" being the commonest word.
             var s = c.rank * 3
-            s -= c.distance * 140
+            s -= c.distance * 400
             if (c.distance > 0 && c.word[0] != lower[0]) s -= 90
+            if (c.distance > 0 && c.word.length == lower.length) s += 30
+            if (c.distance > 0 && c.word.replace("'", "") == lower) s += 300   // dont → don't
             if (c.distance == 0) s -= (c.word.length - lower.length) * 6   // shorter completions first
             scored.add(s to c)
         }
@@ -123,19 +127,22 @@ class SuggestionEngine(context: Context) {
 
     private fun loadDictionary(): Dictionary? {
         val cacheDir = File(appContext.filesDir, "dict").apply { mkdirs() }
-        val cache = File(cacheDir, "en-v$FORMAT_VERSION.bin")
-        try {
-            if (cache.exists()) return Dictionary.fromBytes(cache.readBytes()).also {
-                Log.d(TAG, "dictionary loaded from cache: ${it.sizeBytes / 1024} KB")
-            }
-        } catch (e: Exception) { cache.delete() }
-        val start = System.currentTimeMillis()
         val lines = try {
             appContext.assets.open("dict/en.txt").bufferedReader().readLines()
         } catch (e: Exception) {
             Log.d(TAG, "no bundled dictionary")
             return null
         }
+        // Cache keyed on the asset header + size, so a regenerated word list invalidates it.
+        val tag = ((lines.firstOrNull() ?: "").hashCode() * 31 + lines.size).toUInt().toString(16)
+        val cache = File(cacheDir, "en-$tag-v$FORMAT_VERSION.bin")
+        try {
+            if (cache.exists()) return Dictionary.fromBytes(cache.readBytes()).also {
+                Log.d(TAG, "dictionary loaded from cache: ${it.sizeBytes / 1024} KB")
+            }
+        } catch (e: Exception) { cache.delete() }
+        cacheDir.listFiles()?.forEach { if (it.name != cache.name) it.delete() }
+        val start = System.currentTimeMillis()
         var maxCount = 1.0
         var minCount = Double.MAX_VALUE
         val parsed = ArrayList<Pair<String, Long>>(lines.size)

@@ -80,7 +80,9 @@ class PersonalDictionary private constructor(context: Context) {
 
     private fun rankFor(count: Int) = min(255, 180 + count * 5)
 
+    /** Damerau-Levenshtein (adjacent swap counts as one edit), early exit above [max]. */
     private fun levenshtein(a: String, b: String, max: Int): Int {
+        var prev2: IntArray? = null
         var prev = IntArray(b.length + 1) { it }
         var cur = IntArray(b.length + 1)
         for (i in 1..a.length) {
@@ -88,11 +90,17 @@ class PersonalDictionary private constructor(context: Context) {
             var rowMin = i
             for (j in 1..b.length) {
                 val cost = if (a[i - 1] == b[j - 1]) 0 else 1
-                cur[j] = min(min(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + cost)
-                if (cur[j] < rowMin) rowMin = cur[j]
+                var v = min(min(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + cost)
+                if (prev2 != null && i >= 2 && j >= 2 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1]) {
+                    v = min(v, prev2[j - 2] + 1)
+                }
+                cur[j] = v
+                if (v < rowMin) rowMin = v
             }
             if (rowMin > max) return max + 1
-            val t = prev; prev = cur; cur = t
+            prev2 = prev
+            prev = cur
+            cur = IntArray(b.length + 1)
         }
         return prev[b.length]
     }

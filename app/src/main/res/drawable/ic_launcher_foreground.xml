@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholder icon: a slim keyboard outline with three key rows. Replace before any wider release. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#E2E8F0"
+        android:pathData="M30,40 H78 A4,4 0 0 1 82,44 V64 A4,4 0 0 1 78,68 H30 A4,4 0 0 1 26,64 V44 A4,4 0 0 1 30,40 Z" />
+    <path
+        android:fillColor="#1E293B"
+        android:pathData="M32,45 h6 v5 h-6 z M41,45 h6 v5 h-6 z M50,45 h6 v5 h-6 z M59,45 h6 v5 h-6 z M68,45 h6 v5 h-6 z
+                          M35,52 h6 v5 h-6 z M44,52 h6 v5 h-6 z M53,52 h6 v5 h-6 z M62,52 h6 v5 h-6 z
+                          M38,59 h32 v5 h-32 z" />
+</vector>

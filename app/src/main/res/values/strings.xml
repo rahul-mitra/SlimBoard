@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SlimBoard</string>
+    <string name="subtype_english">English (US)</string>
+
+    <string name="setup_title">SlimBoard setup</string>
+    <string name="setup_step_enable">1. Enable SlimBoard in the system keyboard list</string>
+    <string name="setup_step_select">2. Select SlimBoard as the active keyboard</string>
+    <string name="setup_enable_button">Open keyboard settings</string>
+    <string name="setup_select_button">Choose keyboard</string>
+    <string name="setup_status_enabled">Enabled</string>
+    <string name="setup_status_not_enabled">Not enabled</string>
+    <string name="setup_status_active">Active keyboard</string>
+    <string name="setup_status_not_active">Not the active keyboard</string>
+    <string name="setup_try_hint">Type here to test</string>
+</resources>

@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import android.os.Build
 import app.slimboard.theme.KeyboardTheme
 import app.slimboard.ui.keyboard.KeyboardConfig
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * Typed wrapper over SharedPreferences. Single source of truth for every user setting.
@@ -23,6 +25,8 @@ class Prefs(context: Context) {
     var heightScale: Int by int(HEIGHT_SCALE, 100)      // percent, 80..130
     var bottomPadding: Int by int(BOTTOM_PADDING, 0)    // dp, 0..40
     var toolbar: Boolean by bool(TOOLBAR, true)
+    var oneHanded: Boolean by bool(ONE_HANDED, false)
+    var oneHandedRight: Boolean by bool(ONE_HANDED_RIGHT, true)
 
     // Layout
     var numberRow: Boolean by bool(NUMBER_ROW, false)
@@ -53,6 +57,28 @@ class Prefs(context: Context) {
     var clipboardExpiryHours: Int by int(CLIPBOARD_EXPIRY_HOURS, 24)
     var clipboardMaxImageMb: Int by int(CLIPBOARD_MAX_IMAGE_MB, 10)
 
+    // Text shortcuts: typed word (lowercase) → expansion
+    var shortcuts: Map<String, String>
+        get() = try {
+            val o = JSONObject(sp.getString(SHORTCUTS, "{}") ?: "{}")
+            LinkedHashMap<String, String>().also { m -> for (k in o.keys()) m[k] = o.getString(k) }
+        } catch (e: Exception) { emptyMap() }
+        set(v) = sp.edit().putString(SHORTCUTS, JSONObject(v as Map<*, *>).toString()).apply()
+
+    // Apps where SlimBoard has been used (package → label) and apps excluded from learning
+    var appsSeen: Map<String, String>
+        get() = try {
+            val o = JSONObject(sp.getString(APPS_SEEN, "{}") ?: "{}")
+            LinkedHashMap<String, String>().also { m -> for (k in o.keys()) m[k] = o.getString(k) }
+        } catch (e: Exception) { emptyMap() }
+        set(v) = sp.edit().putString(APPS_SEEN, JSONObject(v as Map<*, *>).toString()).apply()
+    var noLearnApps: Set<String>
+        get() = try {
+            val a = JSONArray(sp.getString(NO_LEARN_APPS, "[]") ?: "[]")
+            HashSet<String>().also { s -> for (i in 0 until a.length()) s.add(a.getString(i)) }
+        } catch (e: Exception) { emptySet() }
+        set(v) = sp.edit().putString(NO_LEARN_APPS, JSONArray(v.toList()).toString()).apply()
+
     // Emoji (internal state, not user-facing)
     var emojiRecents: String
         get() = sp.getString(EMOJI_RECENTS, "") ?: ""
@@ -79,6 +105,29 @@ class Prefs(context: Context) {
     fun unregisterListener(l: SharedPreferences.OnSharedPreferenceChangeListener) =
         sp.unregisterOnSharedPreferenceChangeListener(l)
 
+    /** Every stored setting as JSON, for backup. */
+    fun exportAll(): JSONObject {
+        val o = JSONObject()
+        for ((k, v) in sp.all) if (v != null) o.put(k, v)
+        return o
+    }
+
+    /** Replaces stored settings with the given JSON (types inferred). Unknown keys are kept as-is. */
+    fun importAll(o: JSONObject) {
+        val e = sp.edit()
+        for (k in o.keys()) {
+            when (val v = o.get(k)) {
+                is Boolean -> e.putBoolean(k, v)
+                is Int -> e.putInt(k, v)
+                is Long -> e.putLong(k, v)
+                is Double -> e.putFloat(k, v.toFloat())
+                is String -> e.putString(k, v)
+                else -> Unit
+            }
+        }
+        e.apply()
+    }
+
     // ---- tiny delegates ----
 
     private fun bool(key: String, default: Boolean) = object : kotlin.properties.ReadWriteProperty<Prefs, Boolean> {
@@ -100,6 +149,8 @@ class Prefs(context: Context) {
         const val HEIGHT_SCALE = "height_scale"
         const val BOTTOM_PADDING = "bottom_padding"
         const val TOOLBAR = "toolbar"
+        const val ONE_HANDED = "one_handed"
+        const val ONE_HANDED_RIGHT = "one_handed_right"
         const val NUMBER_ROW = "number_row"
         const val AUTO_CAP = "auto_cap"
         const val DOUBLE_SPACE_PERIOD = "double_space_period"
@@ -117,10 +168,13 @@ class Prefs(context: Context) {
         const val CLIPBOARD_IMAGES = "clipboard_images"
         const val CLIPBOARD_EXPIRY_HOURS = "clipboard_expiry_hours"
         const val CLIPBOARD_MAX_IMAGE_MB = "clipboard_max_image_mb"
+        const val SHORTCUTS = "shortcuts"
+        const val APPS_SEEN = "apps_seen"
+        const val NO_LEARN_APPS = "no_learn_apps"
         const val EMOJI_RECENTS = "emoji_recents"
         const val EMOJI_SKIN_TONES = "emoji_skin_tones"
 
         /** Keys that are internal state; changing them must not trigger a keyboard re-layout. */
-        val INTERNAL_KEYS = setOf(EMOJI_RECENTS, EMOJI_SKIN_TONES)
+        val INTERNAL_KEYS = setOf(EMOJI_RECENTS, EMOJI_SKIN_TONES, APPS_SEEN)
     }
 }

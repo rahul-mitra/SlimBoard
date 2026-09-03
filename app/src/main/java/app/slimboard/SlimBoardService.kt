@@ -5,6 +5,7 @@ import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.inputmethodservice.InputMethodService
 import android.os.Build
@@ -28,16 +29,20 @@ import app.slimboard.emoji.EmojiPanelView
 import app.slimboard.layout.LayoutRepository
 import app.slimboard.settings.Prefs
 import app.slimboard.settings.SettingsActivity
+import app.slimboard.text.EditHistory
 import app.slimboard.text.SuggestionEngine
 import app.slimboard.theme.KeyboardTheme
+import app.slimboard.ui.EditPanelView
 import app.slimboard.ui.InputViewContainer
+import app.slimboard.ui.SideBarView
 import app.slimboard.ui.ToolbarView
 import app.slimboard.ui.keyboard.KeyboardView
 
 /**
  * The input method. Owns the InputConnection side of typing (composing word, suggestions,
- * autocorrect with one-tap revert, auto-cap, double-space period, layer per field type, enter
- * action, insets), the toolbar and its panels, clipboard capture and paste, and emoji search.
+ * autocorrect with one-tap revert, shortcuts, undo, auto-cap, double-space period, layer per field
+ * type, enter action, insets), the toolbar and its panels, clipboard capture and paste, emoji
+ * search, and one-handed mode.
  */
 class SlimBoardService :
     InputMethodService(),
@@ -45,6 +50,8 @@ class SlimBoardService :
     ToolbarView.Listener,
     EmojiPanelView.Listener,
     ClipboardPanel.Listener,
+    EditPanelView.Listener,
+    SideBarView.Listener,
     SharedPreferences.OnSharedPreferenceChangeListener {
 
     private lateinit var prefs: Prefs
@@ -53,12 +60,14 @@ class SlimBoardService :
     private lateinit var clipboard: ClipboardManager
     private lateinit var engine: SuggestionEngine
     private val handler = Handler(Looper.getMainLooper())
+    private val history = EditHistory()
 
     private var container: InputViewContainer? = null
     private var keyboardView: KeyboardView? = null
     private var toolbar: ToolbarView? = null
     private var clipboardPanel: ClipboardPanel? = null
     private var emojiPanel: EmojiPanelView? = null
+    private var editPanel: EditPanelView? = null
 
     private var editor: EditorInfo? = null
     private var lettersLayer = LayoutRepository.QWERTY
@@ -66,8 +75,9 @@ class SlimBoardService :
     private var variant = LayoutRepository.Variant.NONE
     private var isPassword = false
     private var suggestionsForField = false
+    private var shortcuts: Map<String, String> = emptyMap()
 
-    /** Field asked for no personalised learning (incognito) or user forced it. */
+    /** Field asked for no personalised learning (incognito), user forced it, or the app is excluded. */
     var noLearning = false
         private set
 
@@ -104,6 +114,7 @@ class SlimBoardService :
         clipboard = getSystemService(ClipboardManager::class.java)
         clipboard.addPrimaryClipChangedListener(clipListener)
         engine = SuggestionEngine(this)
+        shortcuts = prefs.shortcuts
         Log.d(TAG, "onCreate took ${SystemClock.uptimeMillis() - start} ms")
     }
 
@@ -120,11 +131,18 @@ class SlimBoardService :
         val bar = ToolbarView(this, this)
         val clips = ClipboardPanel(this, store, this)
         val emoji = EmojiPanelView(this, prefs, this)
-        val root = InputViewContainer(this, keyboard, bar, clips, emoji)
+        val edit = EditPanelView(this, this)
+        val side = SideBarView(this, this)
+        val root = InputViewContainer(
+            this, keyboard, bar,
+            mapOf(ToolbarView.Panel.CLIPBOARD to clips, ToolbarView.Panel.EMOJI to emoji, ToolbarView.Panel.EDIT to edit),
+            side,
+        )
         keyboardView = keyboard
         toolbar = bar
         clipboardPanel = clips
         emojiPanel = emoji
+        editPanel = edit
         container = root
         applyAppearance()
         Log.d(TAG, "onCreateInputView took ${SystemClock.uptimeMillis() - start} ms")
@@ -139,8 +157,19 @@ class SlimBoardService :
         clipboardPanel?.theme = theme
         clipboardPanel?.expiryHours = prefs.clipboardExpiryHours
         emojiPanel?.theme = theme
-        // The strip is needed for suggestions even when the user hides the toolbar buttons.
-        container?.toolbarVisible = prefs.toolbar || prefs.suggestions
+        editPanel?.theme = theme
+        container?.let {
+            // The strip is needed for suggestions even when the user hides the toolbar buttons.
+            it.toolbarVisible = prefs.toolbar || prefs.suggestions
+            it.oneHandedRight = prefs.oneHandedRight
+            it.oneHanded = prefs.oneHanded
+            it.sideBarTheme(theme)
+        }
+    }
+
+    private fun InputViewContainer.sideBarTheme(theme: KeyboardTheme) {
+        // SideBarView is owned by the container; theme it through the child list.
+        for (i in 0 until childCount) (getChildAt(i) as? SideBarView)?.theme = theme
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -150,6 +179,7 @@ class SlimBoardService :
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
         if (key in Prefs.INTERNAL_KEYS) return
+        if (key == Prefs.SHORTCUTS) { shortcuts = prefs.shortcuts; return }
         applyAppearance()
         keyboardView?.setLayout(layouts.get(currentLayer, prefs.numberRow, variant))
         updateAutoShift()
@@ -160,17 +190,23 @@ class SlimBoardService :
         showRequestedAt = SystemClock.uptimeMillis()
         editor = info
         analyze(info)
+        rememberApp(info)
         lastSpaceAt = 0
+        if (!restarting) history.clear()
         resetComposing()
 
         val view = keyboardView ?: return
-        exitEmojiSearch()
-        showPanel(ToolbarView.Panel.NONE)
         view.keyPreviewAllowed = !isPassword
         view.enterLabel = enterLabelFor(info)
-        currentLayer = lettersLayer
+        // On a restart the same field continues with changed text (e.g. after a paste): keep the
+        // open panel, the current layer and any emoji search. Only a new field resets them.
+        if (!restarting) {
+            exitEmojiSearch()
+            showPanel(ToolbarView.Panel.NONE)
+            currentLayer = lettersLayer
+            view.resetShift()
+        }
         view.setLayout(layouts.get(currentLayer, prefs.numberRow, variant))
-        view.resetShift()
         updateAutoShift()
         view.onNextDraw = {
             Log.d(TAG, "show -> first draw: ${SystemClock.uptimeMillis() - showRequestedAt} ms (restarting=$restarting)")
@@ -248,7 +284,8 @@ class SlimBoardService :
             else -> false
         }
         noLearning = isPassword || prefs.incognito ||
-            (info.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) != 0
+            (info.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) != 0 ||
+            (info.packageName != null && info.packageName in prefs.noLearnApps)
 
         lettersLayer = when (cls) {
             InputType.TYPE_CLASS_NUMBER, InputType.TYPE_CLASS_DATETIME -> LayoutRepository.NUMPAD
@@ -267,6 +304,23 @@ class SlimBoardService :
         val plainText = cls == InputType.TYPE_CLASS_TEXT && variant == LayoutRepository.Variant.NONE &&
             variation != InputType.TYPE_TEXT_VARIATION_FILTER
         suggestionsForField = prefs.suggestions && plainText && !isPassword && !noSuggestionsFlag
+    }
+
+    /** Keeps a short list of apps the keyboard has been used in, so settings can offer per-app toggles. */
+    private fun rememberApp(info: EditorInfo) {
+        val pkg = info.packageName ?: return
+        if (pkg == packageName) return
+        val seen = prefs.appsSeen
+        if (seen.containsKey(pkg)) return
+        val label = try {
+            packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+        } catch (e: PackageManager.NameNotFoundException) {
+            pkg
+        }
+        val updated = LinkedHashMap(seen)
+        updated[pkg] = label
+        while (updated.size > 30) updated.remove(updated.keys.first())
+        prefs.appsSeen = updated
     }
 
     private fun enterLabelFor(info: EditorInfo): String {
@@ -302,7 +356,7 @@ class SlimBoardService :
         view.setAutoShift(mode != 0)
     }
 
-    // ---- Composing, suggestions, autocorrect ----
+    // ---- Composing, suggestions, autocorrect, shortcuts ----
 
     private fun isWordChar(text: String): Boolean {
         if (text.length != 1) return false
@@ -338,37 +392,67 @@ class SlimBoardService :
         }
     }
 
-    private fun showSuggestions(result: SuggestionEngine.Result) {
-        val items = ArrayList(result.suggestions)
-        var highlight = when {
-            items.isEmpty() -> -1
-            result.autoCorrect != null && prefs.autocorrect -> items.indexOf(result.autoCorrect).takeIf { it >= 0 } ?: 1
-            items.size >= 2 -> 1
-            else -> 0
+    private fun shortcutFor(typed: String): String? = shortcuts[typed.lowercase()]
+
+    /** Items shown in the strip: shortcut expansion first if any, then engine suggestions, then emoji. */
+    private fun stripItems(result: SuggestionEngine.Result): Pair<List<String>, Int> {
+        val items = ArrayList<String>(4)
+        var highlight: Int
+        val expansion = shortcutFor(result.typed)
+        if (expansion != null) {
+            items.add(result.typed)
+            items.add(expansion)
+            result.suggestions.firstOrNull { it != result.typed }?.let { items.add(it) }
+            highlight = 1
+        } else {
+            items.addAll(result.suggestions)
+            highlight = when {
+                items.isEmpty() -> -1
+                result.autoCorrect != null && prefs.autocorrect -> items.indexOf(result.autoCorrect).takeIf { it >= 0 } ?: 1
+                items.size >= 2 -> 1
+                else -> 0
+            }
+            if (highlight >= items.size) highlight = items.size - 1
         }
-        if (highlight >= items.size) highlight = items.size - 1
         EmojiData.exact(result.typed)?.let { if (items.size < 4) items.add(it) }
+        return items to highlight
+    }
+
+    private fun showSuggestions(result: SuggestionEngine.Result) {
+        val (items, highlight) = stripItems(result)
         toolbar?.setSuggestions(result.typed, items, highlight)
     }
 
     /**
-     * Commits the composed word followed by [separator], applying autocorrect when enabled and the
-     * engine has a confident candidate. Remembers the correction so one backspace can undo it.
+     * Commits the composed word followed by [separator]. A text shortcut always expands; otherwise
+     * autocorrect applies when enabled and confident. Both are undoable, and a correction is also
+     * reverted by one backspace.
      */
     private fun commitComposing(separator: String) {
         val ic = currentInputConnection ?: return
         val typed = composing.toString()
         if (typed.isEmpty()) return
-        val result = latestResult?.takeIf { it.typed == typed } ?: engine.suggestSync(typed)
-        val auto = if (prefs.autocorrect) result.autoCorrect else null
+        val expansion = shortcutFor(typed)
+        val result = if (expansion == null) latestResult?.takeIf { it.typed == typed } ?: engine.suggestSync(typed) else null
+        val auto = if (prefs.autocorrect) result?.autoCorrect else null
         ic.beginBatchEdit()
-        if (auto != null && auto != typed) {
-            ic.commitText(auto + separator, 1)
-            lastAutoCorrection = AutoCorrection(typed, auto, separator)
-        } else {
-            ic.commitText(typed + separator, 1)
-            lastAutoCorrection = null
-            learn(typed)
+        when {
+            expansion != null -> {
+                ic.commitText(expansion + separator, 1)
+                history.record(expansion + separator, typed)
+                lastAutoCorrection = AutoCorrection(typed, expansion, separator)
+            }
+            auto != null && auto != typed -> {
+                ic.commitText(auto + separator, 1)
+                history.record(auto + separator, typed)
+                lastAutoCorrection = AutoCorrection(typed, auto, separator)
+            }
+            else -> {
+                ic.commitText(typed + separator, 1)
+                history.record(typed + separator)
+                lastAutoCorrection = null
+                learn(typed)
+            }
         }
         ic.endBatchEdit()
         resetComposing()
@@ -381,7 +465,7 @@ class SlimBoardService :
         engine.learn(word)
     }
 
-    /** Backspace right after an autocorrect restores what was typed and remembers the word. */
+    /** Backspace right after an autocorrect or shortcut restores what was typed. */
     private fun revertAutoCorrection(ac: AutoCorrection) {
         val ic = currentInputConnection ?: return
         ic.beginBatchEdit()
@@ -391,7 +475,7 @@ class SlimBoardService :
         ic.setComposingText(composing, 1)
         ic.endBatchEdit()
         lastAutoCorrection = null
-        if (prefs.learnWords && !noLearning) engine.learn(ac.typed, force = true)
+        if (shortcutFor(ac.typed) == null && prefs.learnWords && !noLearning) engine.learn(ac.typed, force = true)
         requestSuggestions()
     }
 
@@ -409,6 +493,11 @@ class SlimBoardService :
             ToolbarView.Panel.EMOJI -> {
                 emojiPanel?.onShown()
                 EmojiData.ensureLoaded(this) { groups -> emojiPanel?.setData(groups) }
+            }
+            ToolbarView.Panel.EDIT -> {
+                finishComposingInApp()
+                resetComposing()
+                editPanel?.resetSelection()
             }
             ToolbarView.Panel.NONE -> Unit
         }
@@ -447,6 +536,7 @@ class SlimBoardService :
         finishComposingInApp()
         resetComposing()
         currentInputConnection?.commitText(emoji, 1)
+        history.record(emoji)
         lastSpaceAt = 0
         lastAutoCorrection = null
     }
@@ -527,6 +617,18 @@ class SlimBoardService :
         Toast.makeText(this, "This app doesn't accept images here. Long-press the field and choose Paste.", Toast.LENGTH_LONG).show()
     }
 
+    // ---- Key events with modifiers (editing panel) ----
+
+    private fun sendKey(keyCode: Int, meta: Int = 0) {
+        val ic = currentInputConnection ?: return
+        val now = SystemClock.uptimeMillis()
+        ic.sendKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0, meta))
+        ic.sendKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0, meta))
+    }
+
+    private fun shiftMeta(selecting: Boolean) =
+        if (selecting) KeyEvent.META_SHIFT_ON or KeyEvent.META_SHIFT_LEFT_ON else 0
+
     // ---- KeyboardView.Listener ----
 
     override fun onText(text: String) {
@@ -562,6 +664,7 @@ class SlimBoardService :
             ic.deleteSurroundingText(1, 0)
             ic.commitText(". ", 1)
             ic.endBatchEdit()
+            history.record(". ", " ")
             lastSpaceAt = 0
         } else {
             ic.commitText(" ", 1)
@@ -624,6 +727,7 @@ class SlimBoardService :
             sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
         } else {
             ic.deleteSurroundingText(count, 0)
+            history.record("", before.substring(start))
         }
         lastSpaceAt = 0
         updateAutoShift()
@@ -676,6 +780,12 @@ class SlimBoardService :
 
     override fun onEmoji() = togglePanel(ToolbarView.Panel.EMOJI)
 
+    override fun onEdit() = togglePanel(ToolbarView.Panel.EDIT)
+
+    override fun onOneHanded() {
+        prefs.oneHanded = !prefs.oneHanded   // the prefs listener re-applies appearance
+    }
+
     override fun onSettings() {
         val intent = Intent(this, SettingsActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -700,12 +810,13 @@ class SlimBoardService :
     override fun onSuggestion(index: Int) {
         val ic = currentInputConnection ?: return
         val result = latestResult ?: return
-        val items = ArrayList(result.suggestions)
-        EmojiData.exact(result.typed)?.let { if (items.size < 4) items.add(it) }
+        val (items, _) = stripItems(result)
         val chosen = items.getOrNull(index) ?: return
-        val isEmoji = index >= result.suggestions.size
-        ic.commitText(if (isEmoji) chosen else "$chosen ", 1)
-        if (!isEmoji) learn(chosen)
+        val isEmoji = EmojiData.exact(result.typed) == chosen && index == items.lastIndex && chosen != result.typed
+        val text = if (isEmoji) chosen else "$chosen "
+        ic.commitText(text, 1)
+        history.record(text, result.typed)
+        if (!isEmoji && shortcutFor(result.typed) == null) learn(chosen)
         lastAutoCorrection = null
         lastSpaceAt = if (isEmoji) 0 else SystemClock.uptimeMillis()
         resetComposing()
@@ -726,12 +837,64 @@ class SlimBoardService :
         finishComposingInApp()
         resetComposing()
         currentInputConnection?.commitText(text, 1)
+        history.record(text)
         lastSpaceAt = 0
         lastAutoCorrection = null
         updateAutoShift()
     }
 
     override fun onPasteImage(item: ClipItem) = pasteImage(item)
+
+    // ---- EditPanelView.Listener ----
+
+    override fun onMove(dx: Int, dy: Int, selecting: Boolean) {
+        val code = when {
+            dx < 0 -> KeyEvent.KEYCODE_DPAD_LEFT
+            dx > 0 -> KeyEvent.KEYCODE_DPAD_RIGHT
+            dy < 0 -> KeyEvent.KEYCODE_DPAD_UP
+            else -> KeyEvent.KEYCODE_DPAD_DOWN
+        }
+        sendKey(code, shiftMeta(selecting))
+    }
+
+    override fun onHome(selecting: Boolean) = sendKey(KeyEvent.KEYCODE_MOVE_HOME, shiftMeta(selecting))
+
+    override fun onEnd(selecting: Boolean) = sendKey(KeyEvent.KEYCODE_MOVE_END, shiftMeta(selecting))
+
+    /** Context-menu actions first (EditText), Ctrl shortcuts as fallback (Compose, WebView). */
+    private fun contextAction(id: Int, keyCode: Int) {
+        val ic = currentInputConnection ?: return
+        if (!ic.performContextMenuAction(id)) sendKey(keyCode, KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON)
+    }
+
+    override fun onSelectAll() = contextAction(android.R.id.selectAll, KeyEvent.KEYCODE_A)
+
+    override fun onCut() = contextAction(android.R.id.cut, KeyEvent.KEYCODE_X)
+
+    override fun onCopy() = contextAction(android.R.id.copy, KeyEvent.KEYCODE_C)
+
+    override fun onPaste() = contextAction(android.R.id.paste, KeyEvent.KEYCODE_V)
+
+    override fun onUndo() {
+        val ic = currentInputConnection ?: return
+        if (!history.undo(ic)) Toast.makeText(this, "Nothing to undo", Toast.LENGTH_SHORT).show()
+        lastAutoCorrection = null
+    }
+
+    override fun onRedo() {
+        val ic = currentInputConnection ?: return
+        if (!history.redo(ic)) Toast.makeText(this, "Nothing to redo", Toast.LENGTH_SHORT).show()
+    }
+
+    override fun onEditBackspace() = sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
+
+    override fun onEditAbc() = showPanel(ToolbarView.Panel.NONE)
+
+    // ---- SideBarView.Listener ----
+
+    override fun onSwitchSide() { prefs.oneHandedRight = !prefs.oneHandedRight }
+
+    override fun onExitOneHanded() { prefs.oneHanded = false }
 
     private companion object {
         const val TAG = "SlimBoard"

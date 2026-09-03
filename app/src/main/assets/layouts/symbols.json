@@ -39,8 +39,9 @@
     ],
     [
       {"code": "layer", "target": "qwerty", "label": "ABC", "w": 1.5},
+      {"code": "layer", "target": "numpad", "label": "1234", "w": 1.25},
       {"k": ","},
-      {"code": "space", "w": 4.5},
+      {"code": "space", "w": 3.25},
       {"k": "."},
       {"code": "enter", "w": 2}
     ]

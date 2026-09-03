@@ -62,6 +62,21 @@ class PersonalDictionary private constructor(context: Context) {
         return counts.filter { it.value >= KNOWN_AT }.toList().sortedByDescending { it.second }
     }
 
+    /** Every word with its raw count, including ones seen only once. For backup. */
+    fun rawAll(): Map<String, Int> {
+        ensureLoaded()
+        return HashMap(counts)
+    }
+
+    /** Replaces the whole dictionary. For restore. */
+    fun replaceAll(words: Map<String, Int>) {
+        ensureLoaded()
+        counts.clear()
+        for ((w, c) in words) if (w.isNotBlank() && c > 0) counts[w.lowercase()] = c
+        persist()
+        notifyChanged()
+    }
+
     fun completions(prefix: String, out: MutableList<Candidate>) {
         ensureLoaded()
         for ((w, c) in counts) {

@@ -156,7 +156,8 @@ private fun SettingsScreen(
                 }
             }
             PrefSwitch("Key borders", "Outline every key", prefs.keyBorders) { prefs.keyBorders = it }
-            PrefSwitch("Toolbar", "Clipboard, emoji and settings buttons above the keys", prefs.toolbar) { prefs.toolbar = it }
+            PrefSwitch("Toolbar", "Clipboard, emoji, editing and settings buttons above the keys", prefs.toolbar) { prefs.toolbar = it }
+            PrefSwitch("One-handed mode", "Narrow keyboard you can park on either side", prefs.oneHanded) { prefs.oneHanded = it }
             PrefSlider("Keyboard height", prefs.heightScale, 80f..130f, 9, { "$it%" }) { prefs.heightScale = it }
             PrefSlider("Bottom padding", prefs.bottomPadding, 0f..40f, 7, { "$it dp" }) { prefs.bottomPadding = it }
 
@@ -176,6 +177,17 @@ private fun SettingsScreen(
             PrefSwitch("Auto-correct", "Fix the word when you press space. Backspace once to undo.", prefs.autocorrect) { prefs.autocorrect = it }
             PrefSwitch("Learn new words", "Words you type twice are remembered on this device only", prefs.learnWords) { prefs.learnWords = it }
             LearnedWords()
+
+            SectionHeader("Text shortcuts")
+            Text("Type the shortcut and press space to insert the full text.", style = MaterialTheme.typography.bodySmall)
+            Shortcuts(prefs)
+
+            SectionHeader("Apps")
+            Text("Turn off learning in apps where you type things you'd rather not have remembered.", style = MaterialTheme.typography.bodySmall)
+            NoLearnApps(prefs)
+
+            SectionHeader("Backup")
+            BackupRestore()
 
             SectionHeader("Clipboard")
             var clipboardEnabled by remember { mutableStateOf(prefs.clipboardEnabled) }
@@ -312,6 +324,101 @@ private fun LearnedWords() {
             Button(onClick = { dictionary.clear(); words.clear() }, modifier = Modifier.padding(top = 8.dp)) { Text("Forget all") }
         }
     }
+}
+
+@Composable
+private fun Shortcuts(prefs: Prefs) {
+    val items = remember { androidx.compose.runtime.mutableStateListOf<Pair<String, String>>().also { l -> l.addAll(prefs.shortcuts.toList()) } }
+    var key by remember { mutableStateOf("") }
+    var value by remember { mutableStateOf("") }
+    fun save() { prefs.shortcuts = items.associate { it } }
+    for ((k, v) in items.toList()) {
+        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(k, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.width(96.dp))
+            Text(v, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f), maxLines = 2)
+            Text(
+                "Remove",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(start = 12.dp).clickable { items.remove(k to v); save() },
+            )
+        }
+    }
+    Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = key,
+            onValueChange = { key = it.trim().lowercase().filter { c -> c.isLetterOrDigit() } },
+            label = { Text("Shortcut") },
+            singleLine = true,
+            modifier = Modifier.width(120.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        OutlinedTextField(
+            value = value,
+            onValueChange = { value = it },
+            label = { Text("Expands to") },
+            modifier = Modifier.weight(1f),
+        )
+    }
+    Button(
+        onClick = {
+            if (key.isNotEmpty() && value.isNotBlank()) {
+                items.removeAll { it.first == key }
+                items.add(key to value.trim())
+                save()
+                key = ""; value = ""
+            }
+        },
+        modifier = Modifier.padding(top = 8.dp),
+    ) { Text("Add shortcut") }
+}
+
+@Composable
+private fun NoLearnApps(prefs: Prefs) {
+    val apps = remember { prefs.appsSeen.toList().sortedBy { it.second.lowercase() } }
+    val blocked = remember { androidx.compose.runtime.mutableStateListOf<String>().also { it.addAll(prefs.noLearnApps) } }
+    if (apps.isEmpty()) {
+        Text("Apps appear here after you type in them.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+        return
+    }
+    for ((pkg, label) in apps) {
+        SwitchRow(label, if (label != pkg) pkg else null, pkg in blocked) { on ->
+            if (on) blocked.add(pkg) else blocked.remove(pkg)
+            prefs.noLearnApps = blocked.toSet()
+        }
+    }
+}
+
+@Composable
+private fun BackupRestore() {
+    val context = LocalContext.current
+    var status by remember { mutableStateOf("") }
+    val exporter = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        if (uri != null) {
+            status = try {
+                context.contentResolver.openOutputStream(uri)?.use { it.write(Backup.export(context).toByteArray()) }
+                "Backup saved"
+            } catch (e: Exception) { "Backup failed: ${e.message}" }
+        }
+    }
+    val importer = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            status = try {
+                val json = context.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
+                Backup.import(context, json)
+            } catch (e: Exception) { "Restore failed: ${e.message}" }
+        }
+    }
+    Text("Settings, shortcuts, learned words and text clips. Saved as a file you choose; nothing leaves the device.", style = MaterialTheme.typography.bodySmall)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+        Button(onClick = { exporter.launch("slimboard-backup.json") }) { Text("Export") }
+        Button(onClick = { importer.launch(arrayOf("application/json", "text/plain", "*/*")) }) { Text("Import") }
+    }
+    if (status.isNotEmpty()) Text(status, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
 }
 
 @Composable

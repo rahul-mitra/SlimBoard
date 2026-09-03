@@ -26,15 +26,17 @@ class ToolbarView(context: Context, private val listener: Listener) : View(conte
         fun onBack()
         fun onClipboard()
         fun onEmoji()
+        fun onEdit()
+        fun onOneHanded()
         fun onSettings()
         fun onChip()
         fun onSearchResult(emoji: String)
         fun onSuggestion(index: Int)
     }
 
-    enum class Panel { NONE, CLIPBOARD, EMOJI }
+    enum class Panel { NONE, CLIPBOARD, EMOJI, EDIT }
 
-    private enum class Item { BACK, CLIPBOARD, EMOJI, SETTINGS }
+    private enum class Item { BACK, CLIPBOARD, EMOJI, EDIT, ONE_HANDED, SETTINGS }
 
     var theme: KeyboardTheme = KeyboardTheme.DARK
         set(v) { field = v; invalidate() }
@@ -164,20 +166,25 @@ class ToolbarView(context: Context, private val listener: Listener) : View(conte
         if (activePanel != Panel.NONE) visibleItems.add(Item.BACK)
         visibleItems.add(Item.CLIPBOARD)
         visibleItems.add(Item.EMOJI)
+        visibleItems.add(Item.EDIT)
+        visibleItems.add(Item.ONE_HANDED)
         visibleItems.add(Item.SETTINGS)
 
+        // Narrow (one-handed) toolbars pack the buttons tighter.
+        val slotW = minOf(slot, (width - dp(8f)) / visibleItems.size)
         var x = dp(4f)
         for (item in visibleItems) {
             val r = itemRects[item.ordinal]
-            r.set(x, 0f, x + slot, height.toFloat())
+            r.set(x, 0f, x + slotW, height.toFloat())
             val active = (item == Item.CLIPBOARD && activePanel == Panel.CLIPBOARD) ||
-                (item == Item.EMOJI && activePanel == Panel.EMOJI)
+                (item == Item.EMOJI && activePanel == Panel.EMOJI) ||
+                (item == Item.EDIT && activePanel == Panel.EDIT)
             if (active) {
                 fill.color = theme.keyPressed
                 canvas.drawCircle(r.centerX(), r.centerY(), dp(17f), fill)
             }
             drawIcon(canvas, item, r.centerX(), r.centerY())
-            x += slot
+            x += slotW
         }
 
         val chip = chipText
@@ -260,6 +267,27 @@ class ToolbarView(context: Context, private val listener: Listener) : View(conte
                 canvas.drawCircle(cx + 3.3f * u, cy - 2.8f * u, 1.4f * u, fill)
                 canvas.drawArc(cx - 5.2f * u, cy - 4 * u, cx + 5.2f * u, cy + 5.2f * u, 25f, 130f, false, stroke)
             }
+            Item.EDIT -> {
+                // Text cursor with serifs, flanked by tiny arrows.
+                canvas.drawLine(cx, cy - 8 * u, cx, cy + 8 * u, stroke)
+                canvas.drawLine(cx - 3 * u, cy - 8 * u, cx + 3 * u, cy - 8 * u, stroke)
+                canvas.drawLine(cx - 3 * u, cy + 8 * u, cx + 3 * u, cy + 8 * u, stroke)
+                canvas.drawLine(cx - 10 * u, cy, cx - 6 * u, cy, stroke)
+                canvas.drawLine(cx - 8 * u, cy - 2 * u, cx - 10 * u, cy, stroke)
+                canvas.drawLine(cx - 8 * u, cy + 2 * u, cx - 10 * u, cy, stroke)
+                canvas.drawLine(cx + 6 * u, cy, cx + 10 * u, cy, stroke)
+                canvas.drawLine(cx + 8 * u, cy - 2 * u, cx + 10 * u, cy, stroke)
+                canvas.drawLine(cx + 8 * u, cy + 2 * u, cx + 10 * u, cy, stroke)
+            }
+            Item.ONE_HANDED -> {
+                // Wide frame with a narrower keyboard inside on the right and an arrow.
+                canvas.drawRoundRect(cx - 10 * u, cy - 6 * u, cx + 10 * u, cy + 6 * u, 2 * u, 2 * u, stroke)
+                fill.color = theme.label
+                canvas.drawRoundRect(cx + 1 * u, cy - 3.5f * u, cx + 8 * u, cy + 3.5f * u, 1.5f * u, 1.5f * u, fill)
+                canvas.drawLine(cx - 7 * u, cy, cx - 2 * u, cy, stroke)
+                canvas.drawLine(cx - 4 * u, cy - 2 * u, cx - 2 * u, cy, stroke)
+                canvas.drawLine(cx - 4 * u, cy + 2 * u, cx - 2 * u, cy, stroke)
+            }
             Item.SETTINGS -> {
                 canvas.drawCircle(cx, cy, 3.6f * u, stroke)
                 val inner = 6.5f * u
@@ -331,6 +359,8 @@ class ToolbarView(context: Context, private val listener: Listener) : View(conte
                     Item.BACK -> listener.onBack()
                     Item.CLIPBOARD -> listener.onClipboard()
                     Item.EMOJI -> listener.onEmoji()
+                    Item.EDIT -> listener.onEdit()
+                    Item.ONE_HANDED -> listener.onOneHanded()
                     Item.SETTINGS -> listener.onSettings()
                 }
                 return

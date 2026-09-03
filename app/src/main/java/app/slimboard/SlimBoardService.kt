@@ -130,13 +130,24 @@ class SlimBoardService :
         // In landscape the camera cutout sits on a side edge; without this the system insets the
         // whole keyboard away from it and leaves a see-through gap. Keys never sit under the cutout
         // anyway (it is above the toolbar), so drawing into that region is safe.
-        window?.window?.attributes?.let { lp ->
+        window?.window?.let { w ->
+            val lp = w.attributes
             lp.layoutInDisplayCutoutMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
             } else {
                 android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
-            window?.window?.attributes = lp
+            w.attributes = lp
+            // The framework's own IME root layout turns the cutout inset into side padding. Strip
+            // the cutout before it gets there; navigation and status bar insets pass through.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                w.decorView.setOnApplyWindowInsetsListener { v, insets ->
+                    val stripped = android.view.WindowInsets.Builder(insets)
+                        .setInsets(android.view.WindowInsets.Type.displayCutout(), android.graphics.Insets.NONE)
+                        .build()
+                    v.onApplyWindowInsets(stripped)
+                }
+            }
         }
         val keyboard = KeyboardView(this, this)
         val bar = ToolbarView(this, this)

@@ -14,9 +14,15 @@ Android 16, One UI 8.5. Display set to FHD+ 1080x2340 at 450 dpi (density 2.8125
 | 2026-09-03 | 1     | debug   | 8.93 MB | –        | 1 ms              | 7–18 ms (warm)    | 138 MB *  | 14.8 MB * | 20.9 MB *   | 56.0 MB *|
 | 2026-09-03 | 1     | release | 1.02 MB | –        | –                 | –                 | –         | –         | –           | –        |
 
+| 2026-09-03 | 4     | release | 1.6 MB  | –        | 18 ms             | 55 ms cold / 19 ms warm | 45.6 MB | 3.2 MB  | 8.6 MB      | 23.0 MB  |
+
 \* Phase 1 memory was sampled with SlimBoard's own Compose settings activity in the foreground, so it includes
 the settings UI, not just the keyboard. Re-measure with a third-party app focused before comparing to Phase 0.
-Debug APK grew from Compose (settings screen only); release stays at 1 MB.
+Debug APK grew from Compose (settings screen only); release stays small.
+
+Phase 4 release row: measured with Chrome's address bar focused (a third-party app), keyboard visible, after
+typing two keys, dictionary and emoji data loaded. Non-graphics footprint (Java + native + code + private other
++ system) is 22.0 MB, against the 60 MB target. Idle process with keyboard hidden: 10.4 MB PSS.
 
 Notes:
 - "Graphics" is EGL/GL memory for the input method window's surface buffers, allocated by the system for any

@@ -127,6 +127,17 @@ class SlimBoardService :
 
     override fun onCreateInputView(): View {
         val start = SystemClock.uptimeMillis()
+        // In landscape the camera cutout sits on a side edge; without this the system insets the
+        // whole keyboard away from it and leaves a see-through gap. Keys never sit under the cutout
+        // anyway (it is above the toolbar), so drawing into that region is safe.
+        window?.window?.attributes?.let { lp ->
+            lp.layoutInDisplayCutoutMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            } else {
+                android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+            window?.window?.attributes = lp
+        }
         val keyboard = KeyboardView(this, this)
         val bar = ToolbarView(this, this)
         val clips = ClipboardPanel(this, store, this)

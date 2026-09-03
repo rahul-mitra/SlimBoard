@@ -85,6 +85,7 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
     // ---- Paints, created once ----
     private val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = dp(1f) }
+    private val shiftPath = android.graphics.Path()
     private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = dp(2f)
@@ -170,6 +171,7 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
         if (width > 0) layoutKeys(width.toFloat())
         requestLayout()
         invalidate()
+        touchHelper.invalidateRoot()
     }
 
     fun setTheme(newTheme: KeyboardTheme) {
@@ -295,6 +297,8 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
         val label = labelFor(key)
         if (key.type == KeyType.ENTER && label == DEFAULT_ENTER_LABEL) {
             drawEnterIcon(canvas, key)
+        } else if (key.type == KeyType.SHIFT) {
+            drawShiftIcon(canvas, key, isCaps)
         } else if (label.isNotEmpty()) {
             labelPaint.color = if (key.type == KeyType.ENTER || isCaps) theme.labelOnAccent else theme.label
             labelPaint.textSize = when (key.type) {
@@ -307,20 +311,46 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
             canvas.drawText(label, key.rect.centerX(), baseline, labelPaint)
         }
 
-        if (isCaps) {
-            // Small bar under the arrow marks caps lock.
-            keyPaint.color = theme.labelOnAccent
-            val cx = key.rect.centerX()
-            val y = key.rect.centerY() + bigLabelSize * 0.55f
-            canvas.drawRoundRect(cx - dp(7f), y, cx + dp(7f), y + dp(2.5f), dp(1f), dp(1f), keyPaint)
-        }
-
         if (layout.showHints && key.showHint && key.type == KeyType.CHAR) {
             val hint = key.hint
             if (hint != null) {
                 hintPaint.color = theme.hint
                 canvas.drawText(hint, key.rect.right - hintInset, key.rect.top + hintInset + hintPaint.textSize, hintPaint)
             }
+        }
+    }
+
+    /**
+     * Shift arrow drawn as a path so it is big and legible on every device: outline when off,
+     * filled when shifted, filled with a bar underneath for caps lock.
+     */
+    private fun drawShiftIcon(canvas: Canvas, key: Key, isCaps: Boolean) {
+        val s = dp(9f)
+        val cx = key.rect.centerX()
+        val cy = key.rect.centerY() - (if (isCaps) dp(2f) else 0f)
+        shiftPath.reset()
+        shiftPath.moveTo(cx, cy - s * 1.1f)
+        shiftPath.lineTo(cx + s, cy + s * 0.05f)
+        shiftPath.lineTo(cx + s * 0.5f, cy + s * 0.05f)
+        shiftPath.lineTo(cx + s * 0.5f, cy + s * 0.9f)
+        shiftPath.lineTo(cx - s * 0.5f, cy + s * 0.9f)
+        shiftPath.lineTo(cx - s * 0.5f, cy + s * 0.05f)
+        shiftPath.lineTo(cx - s, cy + s * 0.05f)
+        shiftPath.close()
+        val color = if (isCaps) theme.labelOnAccent else theme.label
+        if (shiftState == ShiftState.OFF) {
+            iconPaint.color = color
+            canvas.drawPath(shiftPath, iconPaint)
+        } else {
+            keyPaint.color = color
+            canvas.drawPath(shiftPath, keyPaint)
+            iconPaint.color = color
+            canvas.drawPath(shiftPath, iconPaint)   // stroke on top keeps the corners crisp
+        }
+        if (isCaps) {
+            keyPaint.color = color
+            val y = cy + s * 1.35f
+            canvas.drawRoundRect(cx - s * 0.5f, y, cx + s * 0.5f, y + dp(2.5f), dp(1f), dp(1f), keyPaint)
         }
     }
 
@@ -338,7 +368,7 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
 
     private fun labelFor(key: Key): String = when (key.type) {
         KeyType.CHAR -> if (key.shiftable && shiftState != ShiftState.OFF) key.label.uppercase(Locale.ROOT) else key.label
-        KeyType.SHIFT -> "⇧"
+        KeyType.SHIFT -> "shift"   // drawn as an icon; the label is only used for accessibility
         KeyType.BACKSPACE -> "⌫"
         KeyType.ENTER -> enterLabel
         KeyType.LAYER -> key.label
@@ -503,18 +533,10 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
                 listener.onText(applyShift(option))
                 afterCharCommit()
             }
-        } else {
-            when (key.type) {
-                KeyType.CHAR -> {
-                    listener.onText(if (key.shiftable) applyShift(key.text) else key.text)
-                    afterCharCommit()
-                }
-                KeyType.SPACE -> if (!p.cursorMode) listener.onSpace()
-                KeyType.ENTER -> listener.onEnter()
-                KeyType.SHIFT -> toggleShift()
-                KeyType.LAYER -> listener.onLayer(key.target)
-                KeyType.BACKSPACE, KeyType.PAD -> Unit
-            }
+        } else when (key.type) {
+            KeyType.BACKSPACE -> Unit                      // already handled on press / repeat
+            KeyType.SPACE -> if (!p.cursorMode) listener.onSpace()
+            else -> activate(key)
         }
 
         if (previewPointer === p) previewPointer = null
@@ -524,6 +546,92 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
         p.longPressed = false
         invalidate()
     }
+
+    /** Performs a key's action. Shared by touch release and accessibility click. */
+    private fun activate(key: Key) {
+        when (key.type) {
+            KeyType.CHAR -> {
+                listener.onText(if (key.shiftable) applyShift(key.text) else key.text)
+                afterCharCommit()
+            }
+            KeyType.SPACE -> listener.onSpace()
+            KeyType.ENTER -> listener.onEnter()
+            KeyType.SHIFT -> { toggleShift(); invalidate() }
+            KeyType.LAYER -> listener.onLayer(key.target)
+            KeyType.BACKSPACE -> listener.onBackspace()
+            KeyType.PAD -> Unit
+        }
+    }
+
+    /** Spoken name of a key for TalkBack. */
+    private fun describe(key: Key): String = when (key.type) {
+        KeyType.CHAR -> {
+            val text = if (key.shiftable) applyShift(key.text) else key.text
+            if (text.length == 1 && text[0].isLetter()) (if (text[0].isUpperCase()) "capital $text" else text) else text
+        }
+        KeyType.SPACE -> "space"
+        KeyType.BACKSPACE -> "delete"
+        KeyType.ENTER -> if (enterLabel == DEFAULT_ENTER_LABEL) "enter" else enterLabel
+        KeyType.SHIFT -> when (shiftState) {
+            ShiftState.OFF -> "shift, off"
+            ShiftState.SHIFTED -> "shift, on"
+            ShiftState.CAPS_LOCK -> "shift, caps lock"
+        }
+        KeyType.LAYER -> when (key.label) {
+            "?123" -> "symbols"
+            "ABC" -> "letters"
+            "=\\<" -> "more symbols"
+            "1234" -> "number pad"
+            else -> key.label
+        }
+        KeyType.PAD -> ""
+    }
+
+    // ---- Accessibility: every key is a virtual view ----
+
+    private val touchHelper = object : androidx.customview.widget.ExploreByTouchHelper(this) {
+        private val bounds = android.graphics.Rect()
+
+        override fun getVirtualViewAt(x: Float, y: Float): Int {
+            val key = keyAt(x, y) ?: return INVALID_ID
+            return layout.keys.indexOf(key)
+        }
+
+        override fun getVisibleVirtualViews(virtualViewIds: MutableList<Int>) {
+            for (i in layout.keys.indices) virtualViewIds.add(i)
+        }
+
+        override fun onPopulateNodeForVirtualView(virtualViewId: Int, node: androidx.core.view.accessibility.AccessibilityNodeInfoCompat) {
+            val key = layout.keys.getOrNull(virtualViewId)
+            if (key == null) {
+                node.contentDescription = ""
+                node.setBoundsInParent(android.graphics.Rect(0, 0, 1, 1))
+                return
+            }
+            node.contentDescription = describe(key)
+            node.className = "android.widget.Button"
+            node.addAction(androidx.core.view.accessibility.AccessibilityNodeInfoCompat.ACTION_CLICK)
+            key.rect.round(bounds)
+            @Suppress("DEPRECATION")
+            node.setBoundsInParent(bounds)
+        }
+
+        override fun onPerformActionForVirtualView(virtualViewId: Int, action: Int, arguments: android.os.Bundle?): Boolean {
+            if (action != androidx.core.view.accessibility.AccessibilityNodeInfoCompat.ACTION_CLICK) return false
+            val key = layout.keys.getOrNull(virtualViewId) ?: return false
+            feedback(key)
+            activate(key)
+            return true
+        }
+    }
+
+    init {
+        // Declared after touchHelper on purpose: init blocks run in declaration order.
+        androidx.core.view.ViewCompat.setAccessibilityDelegate(this, touchHelper)
+    }
+
+    override fun dispatchHoverEvent(event: MotionEvent): Boolean =
+        touchHelper.dispatchHoverEvent(event) || super.dispatchHoverEvent(event)
 
     private fun keyAt(x: Float, y: Float): Key? {
         for (key in layout.keys) if (key.rect.contains(x, y)) return key

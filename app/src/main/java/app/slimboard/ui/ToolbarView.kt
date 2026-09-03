@@ -119,6 +119,71 @@ class ToolbarView(context: Context, private val listener: Listener) : View(conte
         setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), heightPx.toInt())
     }
 
+    // ---- Accessibility: buttons, chip and suggestions as virtual views ----
+
+    private val touchHelper = object : androidx.customview.widget.ExploreByTouchHelper(this) {
+        private val bounds = android.graphics.Rect()
+
+        // ids: 0..5 toolbar items by ordinal, 10 chip, 20..23 suggestions, 30 suggestion toggle
+        private fun rectFor(id: Int): RectF? = when {
+            id in Item.values().indices -> itemRects[id].takeIf { visibleItems.contains(Item.values()[id]) && !showingSuggestions }
+            id == 10 -> chipRect.takeIf { !it.isEmpty && !showingSuggestions }
+            id in 20..23 -> suggestionRects[id - 20].takeIf { showingSuggestions && !it.isEmpty }
+            id == 30 -> toggleRect.takeIf { showingSuggestions }
+            else -> null
+        }
+
+        private fun describe(id: Int): String = when {
+            id in Item.values().indices -> when (Item.values()[id]) {
+                Item.BACK -> "back to keyboard"
+                Item.CLIPBOARD -> "clipboard"
+                Item.EMOJI -> "emoji"
+                Item.EDIT -> "text editing"
+                Item.ONE_HANDED -> "one-handed mode"
+                Item.SETTINGS -> "SlimBoard settings"
+            }
+            id == 10 -> "paste ${chipText ?: ""}"
+            id in 20..23 -> suggestions.getOrNull(id - 20) ?: ""
+            id == 30 -> "show toolbar"
+            else -> ""
+        }
+
+        override fun getVirtualViewAt(x: Float, y: Float): Int {
+            for (id in allIds()) if (rectFor(id)?.contains(x, y) == true) return id
+            return INVALID_ID
+        }
+
+        private fun allIds() = Item.values().indices + 10 + (20..23) + 30
+
+        override fun getVisibleVirtualViews(virtualViewIds: MutableList<Int>) {
+            for (id in allIds()) if (rectFor(id) != null) virtualViewIds.add(id)
+        }
+
+        override fun onPopulateNodeForVirtualView(virtualViewId: Int, node: androidx.core.view.accessibility.AccessibilityNodeInfoCompat) {
+            val r = rectFor(virtualViewId)
+            node.contentDescription = describe(virtualViewId)
+            node.className = "android.widget.Button"
+            node.addAction(androidx.core.view.accessibility.AccessibilityNodeInfoCompat.ACTION_CLICK)
+            if (r == null) bounds.set(0, 0, 1, 1) else r.round(bounds)
+            @Suppress("DEPRECATION")
+            node.setBoundsInParent(bounds)
+        }
+
+        override fun onPerformActionForVirtualView(virtualViewId: Int, action: Int, arguments: android.os.Bundle?): Boolean {
+            if (action != androidx.core.view.accessibility.AccessibilityNodeInfoCompat.ACTION_CLICK) return false
+            val r = rectFor(virtualViewId) ?: return false
+            tap(r.centerX(), r.centerY())
+            return true
+        }
+    }
+
+    init {
+        androidx.core.view.ViewCompat.setAccessibilityDelegate(this, touchHelper)
+    }
+
+    override fun dispatchHoverEvent(event: MotionEvent): Boolean =
+        touchHelper.dispatchHoverEvent(event) || super.dispatchHoverEvent(event)
+
     // ---- Drawing ----
 
     override fun onDraw(canvas: Canvas) {

@@ -77,6 +77,8 @@ kotlin {
 dependencies {
     // FileProvider for image paste. Already pulled in by Compose; declared so we compile against it.
     implementation(libs.androidx.core)
+    // ExploreByTouchHelper: exposes the Canvas-drawn keys and toolbar buttons to TalkBack.
+    implementation(libs.androidx.customview)
 
     // Settings screen only. Nothing here is loaded until the settings activity opens.
     implementation(platform(libs.androidx.compose.bom))

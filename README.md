@@ -69,6 +69,15 @@ gone and silently switches back to Samsung Keyboard. Verify which keyboard is re
 adb shell dumpsys input_method | findstr mCurId
 ```
 
+## Regenerating the emoji list
+
+`app/src/main/assets/emoji/emoji.txt` is generated from Unicode's `emoji-test.txt` (Unicode data files
+license). To update for a new Unicode version:
+
+```bash
+powershell -File tools/gen-emoji.ps1 -Version 17.0
+```
+
 ## Baseline measurements
 
 After the keyboard is showing on a connected phone:

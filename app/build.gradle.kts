@@ -75,6 +75,9 @@ kotlin {
 }
 
 dependencies {
+    // FileProvider for image paste. Already pulled in by Compose; declared so we compile against it.
+    implementation(libs.androidx.core)
+
     // Settings screen only. Nothing here is loaded until the settings activity opens.
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)

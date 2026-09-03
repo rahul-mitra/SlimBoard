@@ -155,6 +155,7 @@ private fun SettingsScreen(
                 }
             }
             PrefSwitch("Key borders", "Outline every key", prefs.keyBorders) { prefs.keyBorders = it }
+            PrefSwitch("Toolbar", "Clipboard, emoji and settings buttons above the keys", prefs.toolbar) { prefs.toolbar = it }
             PrefSlider("Keyboard height", prefs.heightScale, 80f..130f, 9, { "$it%" }) { prefs.heightScale = it }
             PrefSlider("Bottom padding", prefs.bottomPadding, 0f..40f, 7, { "$it dp" }) { prefs.bottomPadding = it }
 
@@ -168,6 +169,32 @@ private fun SettingsScreen(
             PrefSwitch("Swipe backspace to delete words", null, prefs.backspaceSwipe) { prefs.backspaceSwipe = it }
             PrefSlider("Long-press delay", prefs.longPressMs, 200f..500f, 5, { "$it ms" }) { prefs.longPressMs = it }
             PrefSwitch("Incognito", "Never learn from typing (has effect once suggestions exist)", prefs.incognito) { prefs.incognito = it }
+
+            SectionHeader("Clipboard")
+            var clipboardEnabled by remember { mutableStateOf(prefs.clipboardEnabled) }
+            SwitchRow("Clipboard history", "Keep what you copy, in the keyboard", clipboardEnabled) {
+                clipboardEnabled = it; prefs.clipboardEnabled = it
+            }
+            if (clipboardEnabled) {
+                PrefSwitch("Save images", "Copied images too, up to ${prefs.clipboardMaxImageMb} MB each", prefs.clipboardImages) { prefs.clipboardImages = it }
+                Text("Auto-clear unpinned items after", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 8.dp))
+                var expiry by remember { mutableStateOf(prefs.clipboardExpiryHours) }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+                    for ((hours, label) in listOf(1 to "1 h", 6 to "6 h", 24 to "1 day", 168 to "7 days", 0 to "Never")) {
+                        FilterChip(
+                            selected = expiry == hours,
+                            onClick = { expiry = hours; prefs.clipboardExpiryHours = hours },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                Text("Pinned items are never auto-cleared.", style = MaterialTheme.typography.bodySmall)
+                val context = LocalContext.current
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+                    Button(onClick = { app.slimboard.clipboard.ClipboardStore.get(context).clearUnpinned() }) { Text("Clear unpinned") }
+                    Button(onClick = { app.slimboard.clipboard.ClipboardStore.get(context).clearAll() }) { Text("Delete all") }
+                }
+            }
 
             SectionHeader("Feedback")
             PrefSwitch("Key preview", "Show the character above the key while pressed", prefs.keyPreview) { prefs.keyPreview = it }
@@ -206,7 +233,7 @@ private fun SettingsScreen(
             SectionHeader("About")
             Text("SlimBoard $versionName", style = MaterialTheme.typography.bodyMedium)
             Text(
-                "No permissions. No network. Nothing you type leaves this device.",
+                "No permissions. No network. Nothing you type or copy leaves this device.",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 4.dp, bottom = 32.dp),
             )

@@ -22,6 +22,7 @@ class Prefs(context: Context) {
     var keyBorders: Boolean by bool(KEY_BORDERS, false)
     var heightScale: Int by int(HEIGHT_SCALE, 100)      // percent, 80..130
     var bottomPadding: Int by int(BOTTOM_PADDING, 0)    // dp, 0..40
+    var toolbar: Boolean by bool(TOOLBAR, true)
 
     // Layout
     var numberRow: Boolean by bool(NUMBER_ROW, false)
@@ -38,6 +39,21 @@ class Prefs(context: Context) {
     var keyPreview: Boolean by bool(KEY_PREVIEW, true)
     var haptics: Boolean by bool(HAPTICS, true)
     var sound: Boolean by bool(SOUND, false)
+
+    // Clipboard
+    var clipboardEnabled: Boolean by bool(CLIPBOARD_ENABLED, true)
+    var clipboardImages: Boolean by bool(CLIPBOARD_IMAGES, true)
+    /** Hours after which unpinned items are removed. 0 = never. */
+    var clipboardExpiryHours: Int by int(CLIPBOARD_EXPIRY_HOURS, 24)
+    var clipboardMaxImageMb: Int by int(CLIPBOARD_MAX_IMAGE_MB, 10)
+
+    // Emoji (internal state, not user-facing)
+    var emojiRecents: String
+        get() = sp.getString(EMOJI_RECENTS, "") ?: ""
+        set(v) = sp.edit().putString(EMOJI_RECENTS, v).apply()
+    var emojiSkinTones: String
+        get() = sp.getString(EMOJI_SKIN_TONES, "{}") ?: "{}"
+        set(v) = sp.edit().putString(EMOJI_SKIN_TONES, v).apply()
 
     fun keyboardConfig() = KeyboardConfig(
         heightScale = heightScale,
@@ -77,6 +93,7 @@ class Prefs(context: Context) {
         const val KEY_BORDERS = "key_borders"
         const val HEIGHT_SCALE = "height_scale"
         const val BOTTOM_PADDING = "bottom_padding"
+        const val TOOLBAR = "toolbar"
         const val NUMBER_ROW = "number_row"
         const val AUTO_CAP = "auto_cap"
         const val DOUBLE_SPACE_PERIOD = "double_space_period"
@@ -87,5 +104,14 @@ class Prefs(context: Context) {
         const val KEY_PREVIEW = "key_preview"
         const val HAPTICS = "haptics"
         const val SOUND = "sound"
+        const val CLIPBOARD_ENABLED = "clipboard_enabled"
+        const val CLIPBOARD_IMAGES = "clipboard_images"
+        const val CLIPBOARD_EXPIRY_HOURS = "clipboard_expiry_hours"
+        const val CLIPBOARD_MAX_IMAGE_MB = "clipboard_max_image_mb"
+        const val EMOJI_RECENTS = "emoji_recents"
+        const val EMOJI_SKIN_TONES = "emoji_skin_tones"
+
+        /** Keys that are internal state; changing them must not trigger a keyboard re-layout. */
+        val INTERNAL_KEYS = setOf(EMOJI_RECENTS, EMOJI_SKIN_TONES)
     }
 }

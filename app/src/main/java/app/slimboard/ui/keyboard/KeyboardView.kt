@@ -383,6 +383,9 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
     // ---- Touch ----
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // A gesture starting in the headroom belongs to whatever sits under us there (the toolbar),
+        // unless a popup is open and the finger is choosing an option.
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && event.y < headroom && popupPointer == null) return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> onDown(event, event.actionIndex)
             MotionEvent.ACTION_MOVE -> for (i in 0 until event.pointerCount) onMove(event, i)

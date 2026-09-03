@@ -1,6 +1,6 @@
 # SlimBoard
 
-A lightweight, private Android keyboard. Personal project. See [PLAN.md](PLAN.md) for the full plan.
+A lightweight, private Android keyboard. Personal project.
 
 ## Requirements
 

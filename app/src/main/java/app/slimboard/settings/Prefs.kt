@@ -46,7 +46,7 @@ class Prefs(context: Context) {
 
     // Suggestions
     var suggestions: Boolean by bool(SUGGESTIONS, true)
-    /** Off until the dictionary quality is proven; see PLAN.md risks. */
+    /** Off until the dictionary quality is proven in daily use. */
     var autocorrect: Boolean by bool(AUTOCORRECT, false)
     var learnWords: Boolean by bool(LEARN_WORDS, true)
 

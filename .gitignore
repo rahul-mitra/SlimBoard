@@ -19,3 +19,6 @@ keystore.properties
 # OS
 .DS_Store
 Thumbs.db
+
+# Private planning notes (kept local)
+plans/

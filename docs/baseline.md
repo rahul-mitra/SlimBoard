@@ -26,7 +26,7 @@ typing two keys, dictionary and emoji data loaded. Non-graphics footprint (Java 
 
 Notes:
 - "Graphics" is EGL/GL memory for the input method window's surface buffers, allocated by the system for any
-  keyboard on this display size. It is not under our control and is excluded from the 60 MB target in PLAN.md;
+  keyboard on this display size. It is not under our control and is excluded from the 60 MB target;
   the target applies to Java + native + code + private other, which is ~36 MB here in a debug build.
 - The debug build carries no R8 and a debug runtime; release numbers should be lower. Measure release once the
   release variant is installed on a phone.
@@ -34,7 +34,7 @@ Notes:
 
 ## Poco M8
 
-Not yet measured. This is the floor device: the PLAN.md targets (cold show < 150 ms) are judged here.
+Not yet measured. This is the floor device: the targets (cold show < 150 ms) are judged here.
 
 | Date | Phase | Build | APK | onCreate | onCreateInputView | show → first draw | PSS total | Java heap | Native heap | Graphics |
 |------|-------|-------|-----|----------|-------------------|-------------------|-----------|-----------|-------------|----------|

@@ -26,7 +26,16 @@ class Key(
     /** Whether the corner hint is drawn (if the layout allows hints at all). */
     val showHint: Boolean = true,
 ) {
+    /** Where the key is drawn. */
     val rect = RectF()
+
+    /**
+     * Where a touch counts as this key. Larger than [rect]: the gaps between keys and the spacers
+     * at the ends of a row belong to the nearest key, so a finger that lands slightly off still
+     * types what it looks like it hit.
+     */
+    val hitRect = RectF()
+
     var pressed = false
 
     val hint: String? get() = longPress.firstOrNull()

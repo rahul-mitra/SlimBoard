@@ -249,7 +249,7 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
 
     private fun layoutKeys(width: Float) {
         var y = headroom + topPad
-        for (row in layout.rows) {
+        for ((index, row) in layout.rows.withIndex()) {
             var totalWeight = 0f
             for (k in row) totalWeight += k.weight
             val unit = width / totalWeight
@@ -257,10 +257,33 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
             for (key in row) {
                 val w = unit * key.weight
                 key.rect.set(x + keyGapH, y + keyGapV / 2, x + w - keyGapH, y + rowHeight - keyGapV / 2)
+                key.hitRect.set(x, y, x + w, y + rowHeight)
                 x += w
             }
+            // The top row also owns the small pad above it; the headroom above that is not ours.
+            expandHitRects(row, if (index == 0) headroom else y, y + rowHeight, width)
             y += rowHeight
         }
+    }
+
+    /**
+     * Grows the touch areas of a row until they tile it completely. Each gap between two keys is
+     * split down the middle, spacers are shared the same way, and the first and last key reach the
+     * edges of the keyboard. Without this the half-key spacers around "a" and "l" swallow touches
+     * that clearly meant those keys.
+     */
+    private fun expandHitRects(row: List<Key>, top: Float, bottom: Float, width: Float) {
+        val keys = ArrayList<Key>(row.size)
+        for (k in row) if (k.type != KeyType.PAD) keys.add(k)
+        val n = keys.size
+        if (n == 0) return
+        // edges[i] is the left edge of key i, edges[n] the right edge of the last key. Computed
+        // from the untouched slot bounds before any hitRect is overwritten.
+        val edges = FloatArray(n + 1)
+        edges[0] = 0f
+        edges[n] = width
+        for (i in 1 until n) edges[i] = (keys[i - 1].hitRect.right + keys[i].hitRect.left) / 2f
+        for (i in 0 until n) keys[i].hitRect.set(edges[i], top, edges[i + 1], bottom)
     }
 
     // ---- Drawing ----
@@ -634,7 +657,7 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
         touchHelper.dispatchHoverEvent(event) || super.dispatchHoverEvent(event)
 
     private fun keyAt(x: Float, y: Float): Key? {
-        for (key in layout.keys) if (key.rect.contains(x, y)) return key
+        for (key in layout.keys) if (key.hitRect.contains(x, y)) return key
         return null
     }
 

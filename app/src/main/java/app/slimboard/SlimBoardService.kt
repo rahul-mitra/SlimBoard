@@ -17,6 +17,7 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputContentInfo
 import android.widget.Toast
@@ -87,6 +88,9 @@ class SlimBoardService :
 
     // Word being composed (underlined in the app) and its suggestions.
     private val composing = StringBuilder()
+    private val extractedTextRequest = ExtractedTextRequest().apply { hintMaxChars = 128; hintMaxLines = 1 }
+    /** Part of [composing] that was already in the field when this word was picked up. */
+    private var adopted = ""
     private var suggestionGeneration = 0
     private var latestResult: SuggestionEngine.Result? = null
     private class AutoCorrection(val typed: String, val applied: String, val separator: String)
@@ -262,9 +266,13 @@ class SlimBoardService :
         candidatesStart: Int, candidatesEnd: Int,
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
-        // The user moved the cursor away from the word we are composing: stop composing it.
+        // The user moved the cursor away from the word we are composing: stop composing it. The
+        // region has to be closed in the app as well, or the next setComposingText would replace
+        // that far-away word with whatever is typed here.
         if (composing.isNotEmpty() && (candidatesEnd < 0 || newSelEnd != candidatesEnd || newSelStart != newSelEnd)) {
+            finishComposingInApp()
             resetComposing()
+            lastAutoCorrection = null
         }
         updateAutoShift()
     }
@@ -380,14 +388,50 @@ class SlimBoardService :
 
     // ---- Composing, suggestions, autocorrect, shortcuts ----
 
-    private fun isWordChar(text: String): Boolean {
-        if (text.length != 1) return false
-        val c = text[0]
-        return c.isLetter() || (c == '\'' && composing.isNotEmpty())
+    /** Letters, and apostrophes inside a word: what a composing region is allowed to cover. */
+    private fun isComposeChar(c: Char): Boolean = c.isLetter() || c == '\''
+
+    /**
+     * Picks an existing word back up when typing continues at its end, so "here" followed by
+     * "inaf" is composed as "hereinaf" and can be corrected to "hereinafter". Does nothing in the
+     * middle of a word, where appending to the region would reorder the text, and nothing unless
+     * the field reports a cursor position we can verify.
+     */
+    private fun adoptWordBeforeCursor(ic: InputConnection) {
+        val after = ic.getTextAfterCursor(1, 0)
+        if (!after.isNullOrEmpty() && isComposeChar(after[0])) return
+        val before = ic.getTextBeforeCursor(MAX_ADOPT_CHARS, 0) ?: return
+        var start = before.length
+        while (start > 0 && isComposeChar(before[start - 1])) start--
+        if (start == 0 && before.length >= MAX_ADOPT_CHARS) return
+        while (start < before.length && !before[start].isLetter()) start++
+        if (start >= before.length) return
+        val word = before.substring(start)
+        val regionStart = verifiedOffsetOf(ic, word)
+        if (regionStart < 0) return
+        composing.append(word)
+        adopted = word
+        ic.setComposingRegion(regionStart, regionStart + word.length)
+    }
+
+    /**
+     * The absolute offset where [word] starts, given that it sits immediately before the cursor, or
+     * -1 if that cannot be confirmed. Both the position and the text at it are checked: composing
+     * the wrong span would let the next keystroke overwrite the wrong part of the field.
+     */
+    private fun verifiedOffsetOf(ic: InputConnection, word: String): Int {
+        val et = ic.getExtractedText(extractedTextRequest, 0) ?: return -1
+        val sel = et.selectionStart
+        val text = et.text ?: return -1
+        if (sel < word.length || sel != et.selectionEnd || sel > text.length) return -1
+        if (text.subSequence(sel - word.length, sel).toString() != word) return -1
+        val start = et.startOffset + sel - word.length
+        return if (start < 0) -1 else start
     }
 
     private fun resetComposing() {
         composing.setLength(0)
+        adopted = ""
         latestResult = null
         toolbar?.setSuggestions("", emptyList(), -1)
     }
@@ -471,7 +515,7 @@ class SlimBoardService :
             }
             else -> {
                 ic.commitText(typed + separator, 1)
-                history.record(typed + separator)
+                history.record(typed + separator, adopted)
                 lastAutoCorrection = null
                 learn(typed)
             }
@@ -488,8 +532,12 @@ class SlimBoardService :
     }
 
     /** Backspace right after an autocorrect or shortcut restores what was typed. */
-    private fun revertAutoCorrection(ac: AutoCorrection) {
-        val ic = currentInputConnection ?: return
+    private fun revertAutoCorrection(ac: AutoCorrection): Boolean {
+        val ic = currentInputConnection ?: return false
+        // The cursor may have moved since the correction. Reverting then would delete whatever
+        // happens to sit here instead.
+        val applied = ac.applied + ac.separator
+        if (ic.getTextBeforeCursor(applied.length, 0)?.toString() != applied) return false
         ic.beginBatchEdit()
         ic.deleteSurroundingText(ac.applied.length + ac.separator.length, 0)
         composing.setLength(0)
@@ -499,6 +547,7 @@ class SlimBoardService :
         lastAutoCorrection = null
         if (shortcutFor(ac.typed) == null && prefs.learnWords && !noLearning) engine.learn(ac.typed, force = true)
         requestSuggestions()
+        return true
     }
 
     // ---- Panels ----
@@ -657,10 +706,19 @@ class SlimBoardService :
         emojiQuery?.let { it.append(text); updateEmojiSearch(); return }
         lastAutoCorrection = null
         lastSpaceAt = 0
-        if (suggestionsForField && isWordChar(text)) {
-            appendToComposing(text)
-            keyboardView?.setAutoShift(false)
-            return
+        if (suggestionsForField && text.length == 1 && isComposeChar(text[0])) {
+            val ic = currentInputConnection
+            if (composing.isEmpty() && ic != null) {
+                // Nothing of ours is composing. Close any region the app is still holding from an
+                // earlier word, then continue the word the cursor is sitting at the end of.
+                ic.finishComposingText()
+                adoptWordBeforeCursor(ic)
+            }
+            if (text[0].isLetter() || composing.isNotEmpty()) {
+                appendToComposing(text)
+                keyboardView?.setAutoShift(false)
+                return
+            }
         }
         if (composing.isNotEmpty()) {
             commitComposing(text)
@@ -709,7 +767,10 @@ class SlimBoardService :
             return
         }
         lastSpaceAt = 0
-        lastAutoCorrection?.let { revertAutoCorrection(it); return }
+        lastAutoCorrection?.let {
+            lastAutoCorrection = null
+            if (revertAutoCorrection(it)) return
+        }
         if (composing.isNotEmpty()) {
             val ic = currentInputConnection ?: return
             composing.setLength(composing.length - 1)
@@ -922,5 +983,7 @@ class SlimBoardService :
         const val TAG = "SlimBoard"
         const val DOUBLE_SPACE_MS = 600L
         const val CHIP_LIFETIME_MS = 60_000L
+        /** How far back a word may reach for it to be picked up again. */
+        const val MAX_ADOPT_CHARS = 48
     }
 }

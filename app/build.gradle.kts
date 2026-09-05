@@ -20,7 +20,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "app.slimboard"
+        applicationId = "com.tytan.slimboard"
         minSdk = 26
         targetSdk = 35
         versionCode = 3

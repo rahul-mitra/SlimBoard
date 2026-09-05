@@ -19,8 +19,8 @@ Things that are useful when working on SlimBoard but do not belong on the front 
 
 ```bash
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell ime enable app.slimboard.debug/app.slimboard.SlimBoardService
-adb shell ime set app.slimboard.debug/app.slimboard.SlimBoardService
+adb shell ime enable com.tytan.slimboard.debug/app.slimboard.SlimBoardService
+adb shell ime set com.tytan.slimboard.debug/app.slimboard.SlimBoardService
 adb shell dumpsys input_method | findstr mCurId
 ```
 
@@ -29,7 +29,9 @@ adb shell dumpsys input_method | findstr mCurId
   switches back to Samsung Keyboard, so your test types into the wrong keyboard.
 - `adb shell uiautomator dump --windows /sdcard/w.xml` includes the IME window, which is how to check the
   TalkBack node names without turning TalkBack on.
-- Release builds install as `app.slimboard` with the id `app.slimboard/.SlimBoardService`.
+- Release builds install as `com.tytan.slimboard` with the id `com.tytan.slimboard/app.slimboard.SlimBoardService`. The
+  short `/.SlimBoardService` form does not work: the applicationId is `com.tytan.slimboard` (Tytan owns the Play
+  listing) while the code still lives in the `app.slimboard` package, so the class name has to be spelled out.
 
 ## Regenerating assets
 
@@ -50,6 +52,16 @@ git tag -a vX.Y.Z -m "SlimBoard X.Y.Z"
 git push origin vX.Y.Z
 gh release create vX.Y.Z app/build/outputs/apk/release/app-release.apk --title "SlimBoard X.Y.Z" --notes-file <notes>
 ```
+
+For the Play listing (Tytan's console) the artefact is an app bundle, not an APK:
+
+```bash
+./gradlew bundleRelease
+```
+
+It lands in `app/build/outputs/bundle/release/`. Play holds the app signing key and re-signs the bundle, so
+`keystore/slimboard-release.jks` counts only as the upload key there. The certificate Play asks for is
+`keytool -export -rfc -keystore keystore/slimboard-release.jks -alias slimboard -file upload_certificate.pem`.
 
 Every release must be signed with the same key (`keystore/slimboard-release.jks`, gitignored) or phones will
 refuse it as an update. Back that file and `keystore.properties` up.

@@ -54,8 +54,8 @@ or from a terminal:
 
 The APK lands in `app/build/outputs/apk/debug/`. Copy it to your phone and open it, exactly as above. If you
 have a phone connected with USB debugging, `adb install -r <apk>` saves the copying step, and
-`adb shell ime set app.slimboard.debug/app.slimboard.SlimBoardService` selects it without touching the settings
-screen. Debug builds install as a separate app (`app.slimboard.debug`) so they sit next to a release install.
+`adb shell ime set com.tytan.slimboard.debug/app.slimboard.SlimBoardService` selects it without touching the settings
+screen. Debug builds install as a separate app (`com.tytan.slimboard.debug`) so they sit next to a release install.
 
 Release builds (`./gradlew assembleRelease`) are minified and signed with `keystore.properties` if present,
 otherwise with the debug key.

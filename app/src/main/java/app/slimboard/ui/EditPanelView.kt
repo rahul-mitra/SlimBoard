@@ -21,6 +21,8 @@ class EditPanelView(context: Context, private val listener: Listener) : View(con
 
     interface Listener {
         fun onMove(dx: Int, dy: Int, selecting: Boolean)
+        /** Select was switched on or off; the anchor of the selection moves with it. */
+        fun onSelectToggle(on: Boolean)
         fun onHome(selecting: Boolean)
         fun onEnd(selecting: Boolean)
         fun onSelectAll()
@@ -175,13 +177,13 @@ class EditPanelView(context: Context, private val listener: Listener) : View(con
             Action.RIGHT -> listener.onMove(1, 0, selecting)
             Action.HOME -> listener.onHome(selecting)
             Action.END -> listener.onEnd(selecting)
-            Action.SELECT -> { selecting = !selecting; invalidate() }
+            Action.SELECT -> { selecting = !selecting; invalidate(); listener.onSelectToggle(selecting) }
             // Leaving Select on means the arrows trim the selection instead of dropping it, and it
             // lights up the button that does the trimming.
-            Action.SELECT_ALL -> { selecting = true; invalidate(); listener.onSelectAll() }
-            Action.CUT -> { selecting = false; listener.onCut() }
-            Action.COPY -> { selecting = false; listener.onCopy() }
-            Action.PASTE -> { selecting = false; listener.onPaste() }
+            Action.SELECT_ALL -> { selecting = true; invalidate(); listener.onSelectToggle(true); listener.onSelectAll() }
+            Action.CUT -> { selecting = false; listener.onSelectToggle(false); listener.onCut() }
+            Action.COPY -> { selecting = false; listener.onSelectToggle(false); listener.onCopy() }
+            Action.PASTE -> { selecting = false; listener.onSelectToggle(false); listener.onPaste() }
             Action.UNDO -> listener.onUndo()
             Action.REDO -> listener.onRedo()
         }

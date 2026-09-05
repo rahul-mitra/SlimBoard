@@ -91,6 +91,9 @@ class SlimBoardService :
     private val extractedTextRequest = ExtractedTextRequest().apply { hintMaxChars = 128; hintMaxLines = 1 }
     /** Part of [composing] that was already in the field when this word was picked up. */
     private var adopted = ""
+
+    /** Fixed end of the selection while the edit panel's Select is on; -1 when there is none. */
+    private var selectionAnchor = -1
     private var suggestionGeneration = 0
     private var latestResult: SuggestionEngine.Result? = null
     private class AutoCorrection(val typed: String, val applied: String, val separator: String)
@@ -930,6 +933,10 @@ class SlimBoardService :
 
     // ---- EditPanelView.Listener ----
 
+    override fun onSelectToggle(on: Boolean) {
+        selectionAnchor = -1
+    }
+
     override fun onMove(dx: Int, dy: Int, selecting: Boolean) {
         val code = when {
             dx < 0 -> KeyEvent.KEYCODE_DPAD_LEFT
@@ -937,12 +944,100 @@ class SlimBoardService :
             dy < 0 -> KeyEvent.KEYCODE_DPAD_UP
             else -> KeyEvent.KEYCODE_DPAD_DOWN
         }
-        sendKey(code, shiftMeta(selecting))
+        if (!selecting) {
+            selectionAnchor = -1
+            sendKey(code, 0)
+            return
+        }
+        // Chrome rebuilds the key events it receives and loses the shift state, so selecting by
+        // sending shift+arrow only works in some apps. Move the selection ourselves where the field
+        // will tell us where the cursor is, and keep shift+arrow as the fallback.
+        if (!moveSelection(dx, dy)) sendKey(code, shiftMeta(true))
     }
 
-    override fun onHome(selecting: Boolean) = sendKey(KeyEvent.KEYCODE_MOVE_HOME, shiftMeta(selecting))
+    override fun onHome(selecting: Boolean) {
+        if (!selecting) selectionAnchor = -1
+        if (!moveSelection(0, 0, toLineStart = true, selecting = selecting)) {
+            sendKey(KeyEvent.KEYCODE_MOVE_HOME, shiftMeta(selecting))
+        }
+    }
 
-    override fun onEnd(selecting: Boolean) = sendKey(KeyEvent.KEYCODE_MOVE_END, shiftMeta(selecting))
+    override fun onEnd(selecting: Boolean) {
+        if (!selecting) selectionAnchor = -1
+        if (!moveSelection(0, 0, toLineEnd = true, selecting = selecting)) {
+            sendKey(KeyEvent.KEYCODE_MOVE_END, shiftMeta(selecting))
+        }
+    }
+
+    /**
+     * Moves the moving end of the selection and leaves the anchor where it was. Returns false when
+     * the field will not report its cursor, which is the caller's cue to fall back to key events.
+     */
+    private fun moveSelection(
+        dx: Int,
+        dy: Int,
+        toLineStart: Boolean = false,
+        toLineEnd: Boolean = false,
+        selecting: Boolean = true,
+    ): Boolean {
+        val ic = currentInputConnection ?: return false
+        val et = ic.getExtractedText(extractedTextRequest, 0) ?: return false
+        val text = et.text ?: return false
+        val base = et.startOffset.coerceAtLeast(0)
+        var selStart = et.selectionStart
+        var selEnd = et.selectionEnd
+        if (selStart < 0 || selEnd < 0) return false
+        if (selStart > selEnd) { val t = selStart; selStart = selEnd; selEnd = t }
+        if (selStart > text.length || selEnd > text.length) return false
+
+        // The anchor is captured the first time an arrow is pressed after Select went on, which is
+        // wherever the cursor was sitting then. An existing selection keeps its far end.
+        if (selectionAnchor < 0) selectionAnchor = base + selStart
+        val anchor = selectionAnchor.coerceIn(base, base + text.length)
+        val focus = if (selStart == selEnd) selStart else if (anchor - base <= selStart) selEnd else selStart
+
+        val target = when {
+            toLineStart -> lineStartOf(text, focus)
+            toLineEnd -> lineEndOf(text, focus)
+            dx != 0 -> (focus + dx).coerceIn(0, text.length)
+            else -> lineMove(text, focus, dy)
+        }
+        if (selecting) ic.setSelection(anchor, base + target) else ic.setSelection(base + target, base + target)
+        return true
+    }
+
+    private fun lineStartOf(text: CharSequence, pos: Int): Int {
+        var i = pos - 1
+        while (i >= 0) {
+            if (text[i] == '\n') return i + 1
+            i--
+        }
+        return 0
+    }
+
+    private fun lineEndOf(text: CharSequence, pos: Int): Int {
+        var i = pos
+        while (i < text.length) {
+            if (text[i] == '\n') return i
+            i++
+        }
+        return text.length
+    }
+
+    /** Up and down keep the column where they can; past the first or last line they go to the ends. */
+    private fun lineMove(text: CharSequence, pos: Int, dy: Int): Int {
+        val start = lineStartOf(text, pos)
+        val column = pos - start
+        if (dy < 0) {
+            if (start == 0) return 0
+            val previous = lineStartOf(text, start - 1)
+            return minOf(previous + column, start - 1)
+        }
+        val end = lineEndOf(text, pos)
+        if (end >= text.length) return text.length
+        val next = end + 1
+        return minOf(next + column, lineEndOf(text, next))
+    }
 
     /** Context-menu actions first (EditText), Ctrl shortcuts as fallback (Compose, WebView). */
     private fun contextAction(id: Int, keyCode: Int) {

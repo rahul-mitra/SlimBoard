@@ -176,7 +176,9 @@ class EditPanelView(context: Context, private val listener: Listener) : View(con
             Action.HOME -> listener.onHome(selecting)
             Action.END -> listener.onEnd(selecting)
             Action.SELECT -> { selecting = !selecting; invalidate() }
-            Action.SELECT_ALL -> { selecting = false; listener.onSelectAll() }
+            // Leaving Select on means the arrows trim the selection instead of dropping it, and it
+            // lights up the button that does the trimming.
+            Action.SELECT_ALL -> { selecting = true; invalidate(); listener.onSelectAll() }
             Action.CUT -> { selecting = false; listener.onCut() }
             Action.COPY -> { selecting = false; listener.onCopy() }
             Action.PASTE -> { selecting = false; listener.onPaste() }
